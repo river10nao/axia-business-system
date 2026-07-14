@@ -500,7 +500,7 @@ function vDashboard(){
   // 受注ID→ステータス/支払方式/出荷（2軸ピルと入金予定の判定に使う）
   const oInfo = {};
   rows('orderLedger').forEach(r=>{ const id=String(r['受注ID']||'').trim(); if(!id) return;
-    oInfo[id] = oInfo[id] || {st:r['ステータス'], pay:r['支払方式']}; });
+    oInfo[id] = oInfo[id] || {st:r['ステータス'], pay:r['支払方式'], via:String(r[NM.via+'経由']||'').trim()!==''}; });
   const shipOf = {};
   rows('shipments').forEach(sp=>{ const id=String(sp['受注ID']||'').trim(); if(id && !shipOf[id]) shipOf[id]=sp; });
 
@@ -593,14 +593,15 @@ function vDashboard(){
     return ['出荷待ち','var(--serious)'];
   };
   const pill2 = (icon, mc)=>'<span class="pill" style="background:color-mix(in srgb,'+mc[1]+' 14%,transparent);color:'+mc[1]+'">'+icon+' '+esc(mc[0])+'</span>';
-  // 支払方式は色なしのプレーン表示（2026-07-15 ユーザー指定: デコらずシンプルに）
-  const payPill = pay=>{ const p=String(pay||'').trim();
-    return p ? '<span class="small">'+esc(p)+'</span>' : '<span class="muted small">—</span>'; };
+  // 支払方式は色なしのプレーン表示・経由案件は（経由先名）を併記（2026-07-15 ユーザー指定: デコらずシンプルに）
+  const payPill = (pay, via)=>{ const p=String(pay||'').trim();
+    const t = (p||'—') + (via ? '（'+NM.via+'）' : '');
+    return '<span class="small'+(p?'':' muted')+'">'+esc(t)+'</span>'; };
   const wbars = cases.length ?
     '<div class="tblwrap"><table><tr><th>受注ID</th><th>卸先</th><th>支払方式</th><th>お金</th><th>商品</th><th class="num">卸額(税抜)</th><th class="num">仕入れ額</th><th class="num">利益</th><th class="num">利益%</th></tr>' +
     cases.map(c=>{ const info=oInfo[c.oid]||{st:c.st};
       return '<tr><td class="mono">'+c.oid+'</td><td style="white-space:nowrap">'+esc(c.w)+'</td>' +
-      '<td style="white-space:nowrap">'+payPill(info.pay)+'</td>' +
+      '<td style="white-space:nowrap">'+payPill(info.pay, info.via)+'</td>' +
       '<td>'+pill2('💰', money2(info.st, info.pay))+'</td><td>'+pill2('📦', goods2(info.st, shipOf[c.oid]))+'</td>' +
       '<td class="num">'+yen(c.sales)+'</td><td class="num">'+yen(c.cost)+'</td><td class="num"><b>'+yen(c.sales-c.cost)+'</b></td>' +
       '<td class="num">'+pctD(c.sales>0?(c.sales-c.cost)/c.sales:null)+'</td></tr>'; }).join('') +
