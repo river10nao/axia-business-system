@@ -630,37 +630,58 @@ function vDashboard(){
     (boardChips.join('') || '<span class="small" style="color:var(--good)"><b>✅ 進行中の残件はありません</b></span>') + '</div></div>';
 
   // 資金繰り（今月のお金の出入り・概算）: 目標vs実績を置換（2026-07-15 ユーザー指定。目標は月次グラフの点線で見る）
-  // バーの中に取引先ごとの内訳セグメントを表示（2026-07-15 ユーザー指定）。狭いセグメントはホバーで金額を出す
-  const pendByW = {};   // 入り内訳: 卸先 → 未入金請求額
-  pendDocs.forEach(d=>{ const k=String(d['卸先名']||'').trim()||'（卸先不明）'; pendByW[k]=(pendByW[k]||0)+num(d['金額（税込）']); });
-  const cashIn = Object.values(pendByW).reduce((a,v)=>a+v,0);                 // 入ってくる予定 = 未入金の発行済み請求書
+  // 入金/出金とも「確定分=ベタ塗り・予定分=斜線」で色分けし、予定の入金は請求書の発行日を出す（2026-07-15 ユーザー指定）
+  // ※ 出金の確定分は暫定で「完了案件の仕入=支払済み扱い」。ディーラー支払いの締め・支払日ルールが決まったら精緻化する（Task #22）
+  const FO_ = FLOW.order;
+  const docMD = d=>String(d['発行日']||'').trim().replace(/^\d{4}\//,'');   // 発行日 → M/D 表示
+  // 入金済みの判定（入金予定 DOC_PEND_RULES の裏返し）: ①は半金入金待ちを過ぎたら、②・全額は最終入金完了で入金済み
+  const docPaid = d=>{ const kind=String(d['種類']||''); if(kind.indexOf('請求書')<0) return false;
+    const st=(oInfo[String(d['受注ID']||'').trim()]||{}).st; if(!st || !FO_.includes(st)) return false;
+    return kind.indexOf('①')>=0 ? FO_.indexOf(st) > FO_.indexOf('半金入金待ち') : st==='最終入金完了'; };
+  const paidDocs = rows('docLog').filter(d=>monthOf(d['発行日'])===m && docPaid(d));
+  const cashInDone = paidDocs.reduce((a,d)=>a+num(d['金額（税込）']),0);      // 確定分 = 今月発行の請求書で入金済み
+  const cashInPend = pendDocs.reduce((a,d)=>a+num(d['金額（税込）']),0);      // 予定分 = 未入金の発行済み請求書（月を跨いだ分も入金まで残る）
+  const cashIn = cashInDone + cashInPend;
   const spLines = calcSalonPay(m);
-  const cashOutSalon = spLines.reduce((a,l)=>a+l.net,0);                      // サロン支払（翌月末振込）
-  // 仕入支払（概算）: 完了案件（最終入金完了）はお金の動きが済んでいるとみなし、進行中案件の仕入を「これから出るお金」に数える。
-  // 月では絞らない＝月を跨いだ案件（7月受注・8月入金の翌月末払い等）も入金が終わるまで残る（入り側の未入金請求書と対になる）
-  const buyByW = {};    // 出（仕入）内訳: 卸先 → 進行中案件の仕入額
-  rows('orderLedger').forEach(r=>{ const st=String(r['ステータス']||'').trim(); if(st===''||st==='最終入金完了') return;
-    const k=String(r['卸先名']||'').trim()||'（卸先不明）'; buyByW[k]=(buyByW[k]||0)+ownCost(r['商品ID'])*num(r['個数']); });
+  const cashOutSalon = spLines.reduce((a,l)=>a+l.net,0);                      // サロン支払（翌月末振込）= 予定分
+  // 仕入: 進行中案件 = これから支払う予定分。今月受注で最終入金完了まで終わった案件は支払済み（確定分）扱い
+  const buyByW = {}, buyDoneByW = {};
+  rows('orderLedger').forEach(r=>{ const st=String(r['ステータス']||'').trim(); if(st==='') return;
+    const k=String(r['卸先名']||'').trim()||'（卸先不明）'; const c=ownCost(r['商品ID'])*num(r['個数']);
+    if(st==='最終入金完了'){ if(monthOf(r['受注日'])===m) buyDoneByW[k]=(buyDoneByW[k]||0)+c; }
+    else buyByW[k]=(buyByW[k]||0)+c; });
   const cashOutBuy = Object.values(buyByW).reduce((a,v)=>a+v,0);
-  const cashOut = cashOutBuy + cashOutSalon;
+  const cashOutDone = Object.values(buyDoneByW).reduce((a,v)=>a+v,0);
+  const cashOut = cashOutDone + cashOutBuy + cashOutSalon;
   const cashNet = cashIn - cashOut;
   const cashMax = Math.max(cashIn, cashOut, Math.abs(cashNet), 1);
-  const toSegs = (obj, color, tipPrefix)=>Object.entries(obj).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1])
-    .map(([label,v],i)=>({label, v, color, alt:i%2===1, tip:tipPrefix+'：'+label}));
+  const toSegs = (obj, color, tipPrefix, striped)=>Object.entries(obj).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1])
+    .map(([label,v],i)=>({label, v, color, alt:i%2===1, striped, tip:tipPrefix+'：'+label}));
+  // 請求書1枚 = 1セグメント（予定分はラベルに発行日「M/D請求」を出し、ホバーで支払期限も見せる）
+  const docSegs = (docs, color, striped, tipPrefix)=>docs.filter(d=>num(d['金額（税込）'])>0)
+    .sort((a,b)=>num(b['金額（税込）'])-num(a['金額（税込）']))
+    .map((d,i)=>{ const w=String(d['卸先名']||'').trim()||'（卸先不明）'; const md=docMD(d);
+      return {label:w+(striped&&md?' '+md+'請求':''), v:num(d['金額（税込）']), color, alt:i%2===1, striped,
+        tip:tipPrefix+'：'+w+(md?'（'+md+'請求'+(striped?'・期限'+(String(d['支払期限']||'').trim()||'—'):'')+'）':'')}; });
+  const segBg = s=>s.striped
+    ? 'background:repeating-linear-gradient(45deg,'+s.color+' 0 5px,color-mix(in srgb,'+s.color+' 55%,transparent) 5px 10px);'
+    : 'background:'+s.color+';';
   const segsHtml = segs=>segs.map((s,i)=>{ const pct = s.v/cashMax*100;
-    return '<div title="'+esc((s.tip||s.label)+' '+yen(s.v))+'" style="flex:0 0 '+pct.toFixed(2)+'%;min-width:0;background:'+s.color+';'+(s.alt?'filter:brightness(1.22);':'')+(i<segs.length-1?'margin-right:2px;':'')+'overflow:hidden;white-space:nowrap;color:#fff;font-size:10.5px;font-weight:700;line-height:20px;padding:0 6px;text-shadow:0 1px 1px rgba(0,0,0,.35)">'+(pct>=8?esc(s.label)+' '+yen(s.v):'')+'</div>';
+    return '<div title="'+esc((s.tip||s.label)+' '+yen(s.v))+'" style="flex:0 0 '+pct.toFixed(2)+'%;min-width:0;'+segBg(s)+(s.alt?'filter:brightness(1.22);':'')+(i<segs.length-1?'margin-right:2px;':'')+'overflow:hidden;white-space:nowrap;color:#fff;font-size:10.5px;font-weight:700;line-height:20px;padding:0 6px;text-shadow:0 1px 1px rgba(0,0,0,.35)">'+(pct>=8?esc(s.label)+' '+yen(s.v):'')+'</div>';
   }).join('');
   const cashRow = (label, v, note, inner)=>'<div style="margin-top:10px"><div class="row small" style="justify-content:space-between"><span>'+label+(note?' <span class="muted">'+note+'</span>':'')+'</span><b>'+yen(v)+'</b></div>' +
     '<div style="display:flex;height:20px;border-radius:10px;background:var(--wash);overflow:hidden;margin-top:4px">'+inner+'</div></div>';
   const cashHtml =
-    cashRow('💰 入ってくる予定', cashIn, '未入金の請求書 '+pendDocs.length+'枚（税込）・卸先ごとの内訳',
-      segsHtml(toSegs(pendByW, 'var(--s2)', '未入金請求書'))) +
-    cashRow('📤 出ていく予定', cashOut, '<span style="color:var(--s3)">■</span>仕入 '+yen(cashOutBuy)+'（進行中の全案件・税抜）＋<span style="color:var(--s5)">■</span>サロン支払 '+yen(cashOutSalon)+'（翌月末）',
-      segsHtml(toSegs(buyByW, 'var(--s3)', '仕入').concat(
-        spLines.filter(l=>l.net>0).sort((a,b)=>b.net-a.net).map((l,i)=>({label:l.name, v:l.net, color:'var(--s5)', alt:i%2===1, tip:'サロン支払：'+l.name}))))) +
+    cashRow('💰 入金', cashIn, 'ベタ塗り=確定 '+yen(cashInDone)+'（入金済み）／斜線=予定 '+yen(cashInPend)+'（未入金の請求書 '+pendDocs.length+'枚・税込）',
+      segsHtml(docSegs(paidDocs, 'var(--s2)', false, '入金済み').concat(
+        docSegs(pendDocs, 'var(--s2)', true, '入金予定')))) +
+    cashRow('📤 出金', cashOut, 'ベタ塗り=確定 '+yen(cashOutDone)+'（支払済み扱い）／斜線=予定: <span style="color:var(--s3)">■</span>仕入 '+yen(cashOutBuy)+'（進行中・税抜）＋<span style="color:var(--s5)">■</span>サロン支払 '+yen(cashOutSalon)+'（翌月末）',
+      segsHtml(toSegs(buyDoneByW, 'var(--s3)', '仕入支払済み', false).concat(
+        toSegs(buyByW, 'var(--s3)', '仕入予定', true),
+        spLines.filter(l=>l.net>0).sort((a,b)=>b.net-a.net).map((l,i)=>({label:l.name, v:l.net, color:'var(--s5)', alt:i%2===1, striped:true, tip:'サロン支払予定：'+l.name}))))) +
     cashRow('🧮 差引の手残り（概算）', cashNet, '',
       segsHtml([{label:cashNet>=0?'手残り':'不足', v:Math.abs(cashNet), color:cashNet>=0?'var(--good)':'var(--crit)', tip:'差引の'+(cashNet>=0?'手残り':'不足分')}])) +
-    '<p class="muted small" style="margin-top:8px">'+NM.credit+'案件の入金は翌月末・'+NM.via+'経由は卸先入金後すぐ。入金の確定は受注のステータス操作で反映されます（入金されるとこの「入ってくる予定」から消えます）</p>';
+    '<p class="muted small" style="margin-top:8px">入金の確定＝今月発行の請求書で入金済みのもの（受注のステータス操作で斜線の予定→ベタ塗りの確定に移ります）。出金の確定＝今月受注で完了した案件の仕入（支払済み扱い・暫定）。'+NM.credit+'案件の入金は翌月末・'+NM.via+'経由は卸先入金後すぐ</p>';
 
   // 入金予定テーブル（請求書ベース: 誰から・いつ・いくら。期限切れは赤）
   const todayStr = today();
