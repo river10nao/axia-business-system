@@ -660,8 +660,9 @@ function vDashboard(){
   const cashOutSalon = spLines.reduce((a,l)=>a+l.net,0);                      // サロン支払（翌月末振込）= 予定分
   // 仕入: 進行中案件 = これから支払う予定分。今月受注で最終入金完了まで終わった案件は支払済み（確定分）扱い
   const buyByW = {}, buyDoneByW = {};
+  // セグメントのラベルは「卸先名/ブランド」（2026-07-15 ユーザー指定。出金が誰向け案件の何の仕入か分かるように）
   rows('orderLedger').forEach(r=>{ const st=String(r['ステータス']||'').trim(); if(st==='') return;
-    const k=String(r['卸先名']||'').trim()||'（卸先不明）'; const c=ownCost(r['商品ID'])*num(r['個数']);
+    const k=(String(r['卸先名']||'').trim()||'（卸先不明）')+'/'+(brandOf(r['商品ID'])||'ブランド不明'); const c=ownCost(r['商品ID'])*num(r['個数']);
     if(st==='最終入金完了'){ if(monthOf(r['受注日'])===m) buyDoneByW[k]=(buyDoneByW[k]||0)+c; }
     else buyByW[k]=(buyByW[k]||0)+c; });
   const cashOutBuy = Object.values(buyByW).reduce((a,v)=>a+v,0);
@@ -672,9 +673,14 @@ function vDashboard(){
   const toSegs = (obj, color, tipPrefix, striped)=>Object.entries(obj).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1])
     .map(([label,v],i)=>({label, v, color, alt:i%2===1, striped, tip:tipPrefix+'：'+label}));
   // 請求書1枚 = 1セグメント（予定分はラベルに発行日「M/D請求」を出し、ホバーで支払期限も見せる）
+  const oBrands = {};   // 受注ID → ブランドの集合（入金セグメントの「卸先名/ブランド」表記用）
+  rows('orderLedger').forEach(r=>{ const id=String(r['受注ID']||'').trim(); if(!id) return;
+    const b=brandOf(r['商品ID']); if(b) (oBrands[id]=oBrands[id]||new Set()).add(b); });
+  const brandsLbl = oid=>{ const a=[...(oBrands[String(oid||'').trim()]||[])]; return a.length? a[0]+(a.length>1?'他'+(a.length-1):'') : ''; };
   const docSegs = (docs, color, striped, tipPrefix)=>docs.filter(d=>num(d['金額（税込）'])>0)
     .sort((a,b)=>num(b['金額（税込）'])-num(a['金額（税込）']))
-    .map((d,i)=>{ const w=String(d['卸先名']||'').trim()||'（卸先不明）'; const md=docMD(d);
+    .map((d,i)=>{ const bl=brandsLbl(d['受注ID']);
+      const w=(String(d['卸先名']||'').trim()||'（卸先不明）')+(bl?'/'+bl:''); const md=docMD(d);
       return {label:w+(striped&&md?' '+md+'請求':''), v:num(d['金額（税込）']), color, alt:i%2===1, striped,
         tip:tipPrefix+'：'+w+(md?'（'+md+'請求'+(striped?'・'+(d._recv?'着金':'期限')+(d._due||String(d['支払期限']||'').trim()||'—'):'')+'）':'')}; });
   const segBg = s=>s.striped
