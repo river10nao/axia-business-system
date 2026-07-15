@@ -623,6 +623,10 @@ function vDashboard(){
     if(chips.length) boardChips.push('<div class="row" style="gap:6px"><b class="small" style="min-width:88px">'+label+'</b>'+chips.join('')+'</div>');
   };
   chipsFor('📋 受注','orders','order',rows('orderLedger'),'受注ID');
+  // 振り分け = 保存済みで未確定の下書き（左ナビの振り分けバッジと同じカウント。2026-07-15 ユーザー指定で残件ボードにも表示）
+  { const nDraft = rows('allocDrafts').filter(d=>String(d['下書きID']||'').trim()!=='').length;
+    if(nDraft) boardChips.push('<div class="row" style="gap:6px"><b class="small" style="min-width:88px">🧮 振り分け</b>' +
+      '<button class="btn sm" onclick="go(\'allocation\');render()">振分中（下書き） <span class="n hot">'+nDraft+'</span></button></div>'); }
   chipsFor('📦 回収・検品','collection','collection',rows('collectionLedger'),'回収ID',['ロット処理なし'],ordersOfCollection);   // 案件数で表示
   chipsFor('🚚 出荷','shipments','shipment',rows('shipments'),'出荷ID',null,r=>[String(r['受注ID']||r['出荷ID']||'').trim()]);   // 案件数で表示
   chipsFor('🛍 店販/EC','hanbai','hanbai',rows('hanbaiOrders'),'注文ID',['EC出品中','完売']);
