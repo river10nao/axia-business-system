@@ -867,13 +867,15 @@ function allocCoverage(){
   const needBy = {};   // 受注ID → { ブランド: 必要数 }
   rows('orderLedger').forEach(r=>{ const id=String(r['受注ID']||'').trim(); const b=brandOf(r['商品ID']); if(!id||!b) return;
     (needBy[id]=needBy[id]||{})[b]=(needBy[id][b]||0)+num(r['個数']); });
-  // 確定グループ: 同時に確定した受注の組（対象受注列）×ブランド。ゴミ箱行も読む（削除の検知用）
+  // 確定グループ: 同時に確定した受注の組（対象受注列）×ブランド×取込日時。ゴミ箱行も読む（削除の検知用）。
+  // 取込日時をキーに入れないと、同じ受注×ブランドを別の日に確定し直したグループ同士が合算されて数量が満ちて見える（2026-07-15の教訓）
   const groups = {};
   rowsAll('collectionLedger').forEach(r=>{
     const b=brandOf(r['商品ID']); if(!b) return;
     const t=String(r['対象受注']||'').split(',').map(x=>x.trim()).filter(x=>x && !x.startsWith('回収:'));
     if(!t.length) return;
-    const g=groups[t.join(',')+'|'+b]=groups[t.join(',')+'|'+b]||{orders:t, brand:b, got:0, kids:new Set(), delKids:new Set()};
+    const key=t.join(',')+'|'+b+'|'+String(r['取込日時']||'').trim();
+    const g=groups[key]=groups[key]||{orders:t, brand:b, got:0, kids:new Set(), delKids:new Set()};
     const kid=String(r['回収ID']||'').trim();
     if(String(r['削除']||'').trim()!==''){ if(kid) g.delKids.add(kid); }
     else { g.got+=num(r['個数']); if(kid) g.kids.add(kid); }
