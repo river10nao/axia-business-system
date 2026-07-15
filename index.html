@@ -633,10 +633,10 @@ function vDashboard(){
     if(chips.length) boardChips.push('<div class="row" style="gap:6px"><b class="small" style="min-width:88px">'+label+'</b>'+chips.join('')+'</div>');
   };
   chipsFor('📋 受注','orders','order',rows('orderLedger'),'受注ID');
-  // 振り分け = 保存済みで未確定の下書き（左ナビの振り分けバッジと同じカウント。2026-07-15 ユーザー指定で残件ボードにも表示）
-  { const nDraft = rows('allocDrafts').filter(d=>String(d['下書きID']||'').trim()!=='').length;
-    if(nDraft) boardChips.push('<div class="row" style="gap:6px"><b class="small" style="min-width:88px">🧮 振り分け</b>' +
-      '<button class="btn sm" onclick="go(\'allocation\');render()">振分中（下書き） <span class="n hot">'+nDraft+'</span></button></div>'); }
+  // 振り分け = 未完了の案件数（振分/発注ステータスで数量が満ちていないもの。下書き数の表示は廃止=2026-07-16 ユーザー指定）
+  { const nPend = allocPending().length;
+    if(nPend) boardChips.push('<div class="row" style="gap:6px"><b class="small" style="min-width:88px">🧮 振り分け</b>' +
+      '<button class="btn sm" onclick="go(\'allocation\');render()">振り分け未完了 <span class="n hot">'+nPend+'</span></button></div>'); }
   chipsFor('📦 回収・検品','collection','collection',rows('collectionLedger'),'回収ID',['ロット処理なし'],ordersOfCollection);   // 案件数で表示
   chipsFor('🚚 出荷','shipments','shipment',rows('shipments'),'出荷ID',null,r=>[String(r['受注ID']||r['出荷ID']||'').trim()]);   // 案件数で表示
   chipsFor('🛍 店販/EC','hanbai','hanbai',rows('hanbaiOrders'),'注文ID',['EC出品中','完売']);
@@ -947,9 +947,9 @@ async function allocRedo(brand){
 
 function alertsHtml(){
   const al = DB.alerts || {stalled:[], overdue:[]};
-  const pa = allocPending();   // 振り分け未完了（案件単位）
-  const pb = allocBroken();    // 振り分けの一部削除による数量不足（事故検知・ステータス不問）
-  const n = (al.stalled||[]).length + (al.overdue||[]).length + pa.length + pb.length;
+  // 振り分け未完了は通常業務の残件なので要対応には出さない（残件ボード側でカウント表示。2026-07-16 ユーザー指定）
+  const pb = allocBroken();    // 振り分けの一部削除による数量不足（事故検知・ステータス不問）は要対応に残す
+  const n = (al.stalled||[]).length + (al.overdue||[]).length + pb.length;
   if(!n) return '<div class="card"><span class="small" style="color:var(--good)"><b>✅ 要対応はありません</b></span>' +
     '<span class="muted small">　停滞案件・入金期限切れなし（しきい値はスプシ「アラート設定」シートで変更できます）</span></div>';
   return '<div class="card" style="border:1.5px solid var(--crit)"><b class="small" style="color:var(--crit)">⚠ 要対応 '+n+'件</b>' +
@@ -960,9 +960,6 @@ function alertsHtml(){
     pb.map(o=>'<tr><td class="mono">受注 '+esc(o.id)+'</td><td>'+esc(o.w)+'</td><td class="small">'+esc(o.brand)+'</td><td class="mono small">'+esc(o.kids||'—')+'</td>' +
       '<td class="mono small" style="color:var(--crit)">'+esc(o.del)+'</td><td><button class="btn sm" onclick="go(\'allocation\');render()">🧮 振り分けへ</button></td></tr>').join('') +
     '</table><p class="muted small" style="margin:6px 0 0">回収・検品画面のゴミ箱から復元するか、振り分けをやり直してください</p></div>' : '') +
-  (pa.length ? '<div class="tblwrap" style="margin-top:8px"><table><tr><th>振り分け未完了</th><th>卸先</th><th>残りブランド</th><th></th></tr>' +
-    pa.map(o=>'<tr><td class="mono">受注 '+esc(o.id)+'</td><td>'+esc(o.w)+'</td><td class="small">'+esc(o.rest.join('・'))+'</td>' +
-      '<td><button class="btn sm" onclick="go(\'allocation\');render()">🧮 振り分けへ</button></td></tr>').join('')+'</table></div>' : '') +
   (al.stalled.length ? '<div class="tblwrap" style="margin-top:8px"><table><tr><th>止まっている案件</th><th>相手</th><th>状態</th><th class="num">経過</th></tr>' +
     al.stalled.map(s=>'<tr><td class="mono">'+esc(s.label)+' '+esc(s.id)+'</td><td>'+esc(s.name)+'</td><td>'+pill(s.status)+'</td>' +
       '<td class="num" style="color:var(--warn)"><b>'+s.days+'日</b><span class="muted small">（目安'+s.threshold+'日）</span></td></tr>').join('')+'</table></div>' : '') +
