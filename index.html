@@ -878,15 +878,18 @@ function allocCoverage(){
     if(String(r['削除']||'').trim()!==''){ if(kid) g.delKids.add(kid); }
     else { g.got+=num(r['個数']); if(kid) g.kids.add(kid); }
   });
-  const per = {};   // 受注ID → { ブランド: {done, partial, kids, delKids} }
+  const per = {};   // 受注ID → { ブランド: {done, partial, broken, kids, delKids, brokenKids, brokenDel} }
   Object.values(groups).forEach(g=>{
     const need = g.orders.reduce((a,oid)=>a+((needBy[oid]||{})[g.brand]||0),0);
     const done = g.got>0 && g.got>=need;
     const partial = g.got>0 && g.got<need;
+    // broken = 一部だけ削除されて数が合わないグループ（他のグループで数量が満ちていても事故として扱う。2026-07-15 K0035の教訓）
+    const broken = partial && g.delKids.size>0;
     g.orders.forEach(oid=>{
-      const e=(per[oid]=per[oid]||{})[g.brand]=per[oid][g.brand]||{done:false, partial:false, kids:new Set(), delKids:new Set()};
+      const e=(per[oid]=per[oid]||{})[g.brand]=per[oid][g.brand]||{done:false, partial:false, broken:false, kids:new Set(), delKids:new Set(), brokenKids:new Set(), brokenDel:new Set()};
       if(done) e.done=true;
       if(partial) e.partial=true;
+      if(broken){ e.broken=true; g.kids.forEach(k=>e.brokenKids.add(k)); g.delKids.forEach(k=>e.brokenDel.add(k)); }
       g.kids.forEach(k=>e.kids.add(k)); g.delKids.forEach(k=>e.delKids.add(k));
     });
   });
@@ -910,7 +913,7 @@ function allocPending(){
     .map(o=>({id:o.id, w:o.w, rest:[...o.brands].filter(b=>!((cov[o.id]||{})[b]||{}).done)}))
     .filter(o=>o.rest.length);
 }
-// 振り分けの一部が削除されて数量不足になっている案件（ステータス不問・事故検知）。
+// 振り分けの一部が回収・検品側で削除されて数が合わなくなっている案件（ステータス不問・事故検知）。
 // 全部削除=振り分けのやり直しは正常動作なのでアラートにしない（見た目が未振分に戻る）
 function allocBroken(){
   const cov = allocCoverage();
@@ -919,10 +922,25 @@ function allocBroken(){
   const out = [];
   Object.entries(cov).forEach(([oid, brands])=>{ if(!info[oid]) return;
     Object.entries(brands).forEach(([b, e])=>{
-      if(e.partial && !e.done && e.delKids.size) out.push({id:oid, w:info[oid].w, brand:b, kids:kFmt(e.kids), del:kFmt(e.delKids)});
+      if(e.broken) out.push({id:oid, w:info[oid].w, brand:b, kids:kFmt(e.brokenKids), del:kFmt(e.brokenDel)});
     });
   });
   return out;
+}
+// 「🔁 振り分けをやり直す」: 壊れたグループの残りの回収をまとめて削除して、まっさらから振り分け直せる状態にする
+async function allocRedo(brand){
+  const cov = allocCoverage();
+  const kids = new Set();
+  Object.keys(ALLOC.sel).filter(k=>ALLOC.sel[k]).forEach(oid=>{ const e=(cov[oid]||{})[brand]; if(e && e.broken) e.brokenKids.forEach(k=>kids.add(k)); });
+  const list=[...kids].sort();
+  if(!list.length){ toast('削除対象の回収がありません', true); return; }
+  if(!confirm(brand+' の前回の振り分け（'+list.join('・')+'）を削除して、最初から振り分け直します。\n削除した内容はゴミ箱と「前回の振り分け」表示に残ります。よろしいですか？')) return;
+  for(const k of list){
+    try{ await apiPost('deleteRecord', {entity:'collection', id:k}); }
+    catch(e){ toast(k+' の削除に失敗: '+e.message, true); }
+  }
+  await reload(['collectionLedger']);
+  toast('前回の振り分けを削除しました。振り分け直してください'); render();
 }
 
 function alertsHtml(){
@@ -936,9 +954,9 @@ function alertsHtml(){
   (al.overdue.length ? '<div class="tblwrap" style="margin-top:8px"><table><tr><th>入金期限切れ</th><th>卸先</th><th>種類</th><th>期限</th><th class="num">超過</th><th class="num">金額(税込)</th><th>今の状態</th></tr>' +
     al.overdue.map(o=>'<tr><td class="mono">'+esc(o.docNo)+'</td><td>'+esc(o.name)+'</td><td class="small">'+esc(o.kind)+'</td><td class="small">'+esc(o.due)+'</td>' +
       '<td class="num" style="color:var(--crit)"><b>'+o.days+'日</b></td><td class="num">'+yen(o.amount)+'</td><td>'+pill(o.status)+'</td></tr>').join('')+'</table></div>' : '') +
-  (pb.length ? '<div class="tblwrap" style="margin-top:8px"><table><tr><th>振り分けの一部が削除されています（数量不足）</th><th>卸先</th><th>ブランド</th><th>残っている回収</th><th>削除された回収</th></tr>' +
+  (pb.length ? '<div class="tblwrap" style="margin-top:8px"><table><tr><th>振り分けの一部が回収・検品で削除されています（数が合いません）</th><th>卸先</th><th>ブランド</th><th>残っている回収</th><th>削除された回収</th><th></th></tr>' +
     pb.map(o=>'<tr><td class="mono">受注 '+esc(o.id)+'</td><td>'+esc(o.w)+'</td><td class="small">'+esc(o.brand)+'</td><td class="mono small">'+esc(o.kids||'—')+'</td>' +
-      '<td class="mono small" style="color:var(--crit)">'+esc(o.del)+'</td></tr>').join('') +
+      '<td class="mono small" style="color:var(--crit)">'+esc(o.del)+'</td><td><button class="btn sm" onclick="go(\'allocation\');render()">🧮 振り分けへ</button></td></tr>').join('') +
     '</table><p class="muted small" style="margin:6px 0 0">回収・検品画面のゴミ箱から復元するか、振り分けをやり直してください</p></div>' : '') +
   (pa.length ? '<div class="tblwrap" style="margin-top:8px"><table><tr><th>振り分け未完了</th><th>卸先</th><th>残りブランド</th><th></th></tr>' +
     pa.map(o=>'<tr><td class="mono">受注 '+esc(o.id)+'</td><td>'+esc(o.w)+'</td><td class="small">'+esc(o.rest.join('・'))+'</td>' +
@@ -1847,17 +1865,18 @@ function vAllocation(){
     (olist.map(g=>{
       const open = (ALLOC.open||{})[g.id];
       const bc = cov[g.id]||{};
-      const mark = b=>{ const e=bc[b]; return e&&e.done ? '✅' : (e&&e.partial ? '⚠️' : ''); };
+      const mark = b=>{ const e=bc[b]; return e&&e.broken ? '🔴' : (e&&e.done ? '✅' : (e&&e.partial ? '⚠️' : '')); };
       const isDone = g.brands.size>0 && [...g.brands].every(b=>bc[b]&&bc[b].done);   // 全ブランドの数量が満ちて=振分完了
+      const hasBroken = [...g.brands].some(b=>bc[b]&&bc[b].broken);   // 一部削除で数が合わない（済みでも選択可にして直せるように）
       const allK = new Set(); [...g.brands].forEach(b=>{ if(bc[b]) bc[b].kids.forEach(k=>allK.add(k)); });
       let h = '<tr style="cursor:pointer'+(isDone?';background:color-mix(in srgb,var(--muted) 18%,transparent);opacity:.62':'')+'" onclick="allocOpenToggle(\''+g.id+'\')">' +
-        '<td onclick="event.stopPropagation()"><input type="checkbox" '+(ALLOC.sel[g.id]?'checked':'')+(isDone?' disabled':'')+' onclick="allocToggleOrder(\''+g.id+'\',this.checked)" style="width:16px;height:16px"></td>' +
+        '<td onclick="event.stopPropagation()"><input type="checkbox" '+(ALLOC.sel[g.id]?'checked':'')+(isDone && !hasBroken?' disabled':'')+' onclick="allocToggleOrder(\''+g.id+'\',this.checked)" style="width:16px;height:16px"></td>' +
         '<td class="mono">'+(open?'▾':'▸')+' '+g.id+'</td><td>'+pill(g.st)+(isDone?' <span class="small" style="color:var(--good);font-weight:700">✅振分済み</span>'+(allK.size?' <span class="mono small muted">'+esc(kFmt(allK))+'</span>':''):'')+'</td><td class="small">'+esc(g.w)+'</td>' +
-        '<td class="small">'+[...g.brands].map(b=>{ const e=bc[b]; const tip=e&&(e.kids.size||e.delKids.size)?' title="回収ID: '+esc(kFmt(e.kids)||'—')+(e.delKids.size?'／削除済み: '+esc(kFmt(e.delKids)):'')+'"':''; return '<span'+tip+'>'+mark(b)+esc(b)+'</span>'; }).join('・')+'</td>' +
+        '<td class="small">'+[...g.brands].map(b=>{ const e=bc[b]; const tip=e&&(e.kids.size||e.delKids.size)?' title="回収ID: '+esc(kFmt(e.kids)||'—')+(e.delKids.size?'／削除済み: '+esc(kFmt(e.delKids)):'')+'"':''; return '<span'+tip+(e&&e.broken?' style="color:var(--crit);font-weight:700"':'')+'>'+mark(b)+esc(b)+'</span>'; }).join('・')+'</td>' +
         '<td class="small muted">'+esc(g.date)+'</td><td class="num">'+g.n+'</td></tr>';
       if(open){
         const lines = rows('orderLedger').filter(r=>String(r['受注ID']||'').trim()===g.id);
-        h += '<tr><td style="border:0"></td><td colspan="6" style="padding:0 8px 10px"><table style="margin:0"><tr><th>商品</th><th>容量</th><th class="num">個数</th><th>ブランド</th></tr>' +
+        h += '<tr><td style="border:0"></td><td colspan="6" style="padding:4px 8px 10px;background:var(--wash);border-radius:8px"><table style="margin:0"><tr><th>商品</th><th>容量</th><th class="num">個数</th><th>ブランド</th></tr>' +
           lines.map(r=>'<tr><td class="small">'+esc(r['商品名'])+'</td><td class="small">'+esc(r['容量'])+'</td><td class="num">'+r['個数']+'</td><td class="small muted">'+esc(brandOf(r['商品ID']))+'</td></tr>').join('') +
           '</table></td></tr>';
       }
@@ -1871,15 +1890,36 @@ function vAllocation(){
   const selOrders = rows('orderLedger').filter(r=>ALLOC.sel[String(r['受注ID']||'').trim()]);
   const brandDone = b=>{ const t=selOrders.filter(r=>(brandOf(r['商品ID'])||'（メーカー不明）')===b);
     return t.length>0 && t.every(r=>(((cov[String(r['受注ID']).trim()]||{})[b])||{}).done); };
-  html += '<div class="tabs">'+brands.map(b=>'<button class="'+(b===ALLOC.brand?'on':'')+'"'+(brandDone(b)?' style="background:color-mix(in srgb,var(--muted) 18%,transparent);opacity:.62"':'')+' onclick="ALLOC.brand=\''+esc(b)+'\';render()">'+(brandDone(b)?'✅':'')+esc(b)+'</button>').join('')+'</div>';
+  const brandBroken = b=>selOrders.some(r=>((((cov[String(r['受注ID']).trim()]||{})[b])||{}).broken));
+  html += '<div class="tabs">'+brands.map(b=>'<button class="'+(b===ALLOC.brand?'on':'')+'"'+(brandDone(b)&&!brandBroken(b)?' style="background:color-mix(in srgb,var(--muted) 18%,transparent);opacity:.62"':'')+' onclick="ALLOC.brand=\''+esc(b)+'\';render()">'+(brandBroken(b)?'🔴':brandDone(b)?'✅':'')+esc(b)+'</button>').join('')+'</div>';
   const brand = ALLOC.brand;
+  // 前回の振り分け（削除済み）の参考表示: 選択中の受注×このブランドの削除行（やり直し時に前回の割り振りを見ながら組めるように）
+  const prevRows = rowsAll('collectionLedger').filter(r=>{
+    if(String(r['削除']||'').trim()==='') return false;
+    if(brandOf(r['商品ID'])!==brand) return false;
+    return String(r['対象受注']||'').split(',').map(x=>x.trim()).some(oid=>ALLOC.sel[oid]); });
+  const prevHtml = prevRows.length ? '<details style="margin-top:8px"><summary class="small muted" style="cursor:pointer">📜 前回の振り分け（削除済み・参考 '+prevRows.length+'明細）</summary>' +
+    '<div class="tblwrap" style="margin-top:6px"><table><tr><th>回収ID</th><th>サロン</th><th>商品</th><th class="num">個数</th><th>削除日時</th></tr>' +
+    prevRows.map(r=>'<tr><td class="mono small">'+esc(r['回収ID'])+'</td><td class="small">'+esc(r['サロン名'])+'</td><td class="small">'+esc(r['商品名'])+'</td><td class="num">'+r['個数']+'</td><td class="small muted">'+esc(r['削除'])+'</td></tr>').join('') +
+    '</table></div></details>' : '';
+  if(brandBroken(brand)){
+    const dset=new Set(), bset=new Set();
+    selOrders.forEach(r=>{ const e=(cov[String(r['受注ID']).trim()]||{})[brand]; if(e&&e.broken){ e.brokenDel.forEach(k=>dset.add(k)); e.brokenKids.forEach(k=>bset.add(k)); } });
+    html += '<div class="card" style="border:1.5px solid var(--crit)"><b class="small" style="color:var(--crit)">🔴 '+esc(kFmt(dset))+' が回収・検品で削除されたため、'+esc(brand)+' の振り分けは数が合っていません</b>' +
+      '<p class="muted small" style="margin:6px 0 0">残っている回収: '+esc(kFmt(bset)||'—')+'。回収・検品のゴミ箱から復元して元に戻すか、下のボタンで最初から振り分け直してください</p>' +
+      '<div class="row" style="margin-top:8px"><button class="btn pri" onclick="allocRedo(\''+esc(brand)+'\')">🔁 振り分けをやり直す（残りの回収も削除して最初から）</button></div>' +
+      prevHtml + '</div>';
+    return html;
+  }
   if(brandDone(brand)){
     const ks = new Set(); selOrders.forEach(r=>{ const e=(cov[String(r['受注ID']).trim()]||{})[brand]; if(e) e.kids.forEach(k=>ks.add(k)); });
     html += '<div class="card" style="opacity:.8"><b class="small">✅ '+esc(brand)+' は回収・検品へ入れ込み済みです</b>' +
       '<p class="small" style="margin:6px 0 0"><b>回収ID: '+esc(kFmt(ks)||'—')+'</b>（回収・検品画面で確認・印刷できます）</p>' +
-      '<p class="muted small" style="margin:6px 0 0">やり直す場合は回収・検品側で該当の回収を削除するとここが再び操作できるようになります（一部だけ削除すると数量不足として要対応アラートに出ます）</p></div>';
+      '<p class="muted small" style="margin:6px 0 0">やり直す場合は回収・検品側で該当の回収を削除するとここが再び操作できるようになります（一部だけ削除すると数が合わない警告が出ます）</p>' +
+      prevHtml + '</div>';
     return html;
   }
+  if(prevRows.length) html += '<div class="card">'+prevHtml+'</div>';
   const conf = ALLOC.conf[brand]||{};
   const items = allocItems(brand);
   const needTotal = items.reduce((a,i)=>a+i.need,0);
