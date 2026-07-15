@@ -706,16 +706,16 @@ function vDashboard(){
   // 入金予定テーブル（請求書ベース: 誰から・いつ・いくら。期限切れは赤）
   const todayStr = today();
   const pendHtml = '<div class="card"><b class="small">💴 入金予定（発行済み請求書ベース）</b><div class="tblwrap" style="margin-top:8px">' +
-    '<table><tr><th>支払期限</th><th>卸先（誰から）</th><th>種類</th><th class="num">金額（税込）</th><th>管理番号</th><th>受注ID</th></tr>' +
+    '<table><tr><th>支払期限</th><th>卸先（誰から）</th><th>支払方式</th><th>種類</th><th class="num">金額（税込）</th><th>管理番号</th><th>受注ID</th></tr>' +
     (pendDocs.map(d=>{
       const due = d._due;
       const overdue = due && due < todayStr;
       // 掛け払い案件: 表示・期限切れ判定とも着金予定日。卸先→掛け払い会社の支払期日（帳票に印字した日付）はホバーで見せる
       const dueHtml = esc(due||'—') + (d._recv ? ' <span class="muted" title="卸先の支払期日（帳票印字）は '+esc(String(d['支払期限']||'').trim()||'—')+'">着金</span>' : '');
       return '<tr><td class="small"'+(overdue?' style="color:var(--crit);font-weight:700"':'')+'>'+dueHtml+(overdue?' ⚠':'')+'</td>' +
-        '<td>'+esc(d['卸先名'])+'</td><td class="small">'+esc(d['種類'])+'</td>' +
+        '<td>'+esc(d['卸先名'])+'</td><td style="white-space:nowrap">'+(o=>payPill(o.pay,o.via))(oInfo[String(d['受注ID']||'').trim()]||{})+'</td><td class="small">'+esc(d['種類'])+'</td>' +
         '<td class="num"><b>'+yen(num(d['金額（税込）']))+'</b></td><td class="mono small">'+esc(d['管理番号'])+'</td><td class="mono small">'+esc(d['受注ID'])+'</td></tr>';
-    }).join('') || '<tr><td colspan="6" class="muted">入金待ちの請求書はありません</td></tr>') +
+    }).join('') || '<tr><td colspan="7" class="muted">入金待ちの請求書はありません</td></tr>') +
   '</table></div></div>';
 
   return '<h1>ダッシュボード</h1><div class="sub">対象月: '+monthPicker()+'</div>' +
