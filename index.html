@@ -399,7 +399,10 @@ function renderNav(){
     '<div class="foot"><button class="btn sm" onclick="reload().then(()=>toast(\'最新データを読み込みました\'))">🔄 データ更新</button><br><br>' +
     '<button class="btn sm" onclick="cycleTheme()">'+themeLabel()+'</button><br><br>' +
     '<a href="#" onclick="logout();return false">ログアウト</a></div>';
-  document.getElementById('mnav').innerHTML = items.map(n=>'<button class="'+(view===n[0]?'on':'')+'" onclick="go(\''+n[0]+'\')">'+n[1].split(' ')[0]+'<br>'+n[1].split(' ')[1]+badge(n[0])+'</button>').join('');
+  // スマホの下タブにもテーマ切替を出す（サイドバー非表示のため。2026-07-16 ユーザー指摘）
+  const mTheme = (localStorage.getItem('gyomu_biz_theme')||'')==='light' ? '☀️' : (localStorage.getItem('gyomu_biz_theme')||'')==='dark' ? '🌙' : '🌓';
+  document.getElementById('mnav').innerHTML = items.map(n=>'<button class="'+(view===n[0]?'on':'')+'" onclick="go(\''+n[0]+'\')">'+n[1].split(' ')[0]+'<br>'+n[1].split(' ')[1]+badge(n[0])+'</button>').join('') +
+    '<button onclick="cycleTheme()">'+mTheme+'<br>表示</button>';
 }
 function go(v){ view = v; viewState = {}; render(); window.scrollTo(0,0); }
 function setVS(k,v){ viewState[k]=v; render(); }
