@@ -1599,7 +1599,7 @@ function vHanbai(){
     const sellBtn = (ec && st==='EC出品中') ? '<button class="btn pri sm" onclick="ecSellUI(\''+id+'\')">💴 売れた</button>' : '';
     // 完売はフロー外の終端なので、巻き戻し用フローにだけ 完売 を足す（進めるボタンには出さない）
     const rbFlow = ec ? FLOW.hanbaiEC.concat(['完売']) : FLOW.hanbai;
-    return '<tr><td>'+selBox(id)+'</td><td class="mono">'+id+'</td><td>'+(ec?'<span class="pill" style="background:color-mix(in srgb,var(--s2) 15%, transparent);color:var(--s2)">EC</span>':'<span class="muted small">店販</span>')+'</td><td class="small">'+esc(r['注文日'])+'</td><td>'+esc(r['サロン名'])+'</td><td>'+esc(r['商品名'])+'</td><td class="num">'+r['個数']+'</td><td>'+pill(st)+'</td>' +
+    return '<tr><td>'+selBox(id)+'</td><td class="mono">'+id+'</td><td>'+(ec?'<span class="pill" style="background:color-mix(in srgb,var(--s2) 15%, transparent);color:var(--s2)">EC</span>':'<span class="pill" style="background:color-mix(in srgb,var(--s1) 15%, transparent);color:var(--s1)">店販</span>')+'</td><td class="small">'+esc(r['注文日'])+'</td><td>'+esc(r['サロン名'])+'</td><td>'+esc(r['商品名'])+'</td><td class="num">'+r['個数']+'</td><td>'+pill(st)+'</td>' +
     '<td class="small">'+(ec ? (st==='EC出品中'&&zan!=null ? '残 '+zan+'点' : '') : esc(r['お渡し日']||'')+' '+esc(r['お渡し担当']||''))+'</td>' +
     '<td><div class="row">'+sellBtn+advanceBtn('hanbai', id, st, hbFlowOf(r))+rollbackBtn('hanbai', id, st, rbFlow)+deleteBtn('hanbai', id)+'</div></td></tr>';
   }).join('') || '<tr><td colspan="10" class="muted">注文はまだありません</td></tr>') + '</table></div>' +
@@ -1611,7 +1611,7 @@ function vHanbai(){
     let html = '<tr style="cursor:pointer" onclick="aggToggle(this.dataset.k)" data-k="'+esc(k)+'"><td>'+(open?'▾':'▸')+' '+esc(k)+'</td><td class="num">'+v.n+'</td><td class="num">'+yen(v.amt)+'</td></tr>';
     if(open){
       html += '<tr><td colspan="3" style="padding:4px 8px 10px 26px;background:var(--wash)"><table><tr><th>注文ID</th><th>区分</th><th>注文日</th><th>商品</th><th class="num">個数</th><th class="num">金額（サロン仕入・税抜）</th><th>状態</th></tr>' +
-        v.items.map(r=>'<tr><td class="mono small">'+r['注文ID']+'</td><td>'+(String(r['区分']||'').trim()==='EC'?'<span class="pill" style="background:color-mix(in srgb,var(--s2) 15%, transparent);color:var(--s2)">EC</span>':'<span class="muted small">店販</span>')+'</td><td class="small">'+esc(r['注文日'])+'</td><td>'+esc(r['商品名'])+(r['容量']?' <span class="muted small">'+esc(r['容量'])+'</span>':'')+'</td>' +
+        v.items.map(r=>'<tr><td class="mono small">'+r['注文ID']+'</td><td>'+(String(r['区分']||'').trim()==='EC'?'<span class="pill" style="background:color-mix(in srgb,var(--s2) 15%, transparent);color:var(--s2)">EC</span>':'<span class="pill" style="background:color-mix(in srgb,var(--s1) 15%, transparent);color:var(--s1)">店販</span>')+'</td><td class="small">'+esc(r['注文日'])+'</td><td>'+esc(r['商品名'])+(r['容量']?' <span class="muted small">'+esc(r['容量'])+'</span>':'')+'</td>' +
           '<td class="num">'+r['個数']+'</td><td class="num">'+yen(salonCost(r['商品ID'])*num(r['個数']))+'</td><td>'+pill(r['ステータス'])+'</td></tr>').join('') +
         '</table></td></tr>';
     }
