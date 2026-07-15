@@ -861,19 +861,45 @@ function printAnbetsu(){
 function kpi(l,v,d){ return '<div class="kpi"><div class="l">'+l+'</div><div class="v">'+v+'</div>'+(d?'<div class="d">'+d+'</div>':'')+'</div>'; }
 // ⚠ 要対応ウィジェット: 止まっている案件（アラート設定シートのしきい値超え）と入金期限切れ
 // ===== 振り分けの入れ込み済み判定（2026-07-15 ユーザー指定: 済みはグレーアウト・未完了は案件単位でアラート） =====
-// 回収管理へ入れ込み済みの「受注×ブランド」。振り分け確定=回収台帳に「対象受注」つきの行がある（ゴミ箱行は除く）
-function allocDoneMap(){
-  const done = {};   // 受注ID → Set(ブランド)
-  rows('collectionLedger').forEach(r=>{
-    const b = brandOf(r['商品ID']); if(!b) return;
-    String(r['対象受注']||'').split(',').map(x=>x.trim()).filter(x=>x && !x.startsWith('回収:'))
-      .forEach(oid=>(done[oid]=done[oid]||new Set()).add(b));
+// 済み判定は「数量ベース」: 確定グループ（対象受注×ブランド）ごとに、受注の必要数 vs 回収台帳の割当数を突合する。
+// 一部の回収を削除して数量が足りなくなったら「済み」が外れ、⚠️数量不足として検知する（2026-07-15 K0036削除事故の教訓）
+function allocCoverage(){
+  const needBy = {};   // 受注ID → { ブランド: 必要数 }
+  rows('orderLedger').forEach(r=>{ const id=String(r['受注ID']||'').trim(); const b=brandOf(r['商品ID']); if(!id||!b) return;
+    (needBy[id]=needBy[id]||{})[b]=(needBy[id][b]||0)+num(r['個数']); });
+  // 確定グループ: 同時に確定した受注の組（対象受注列）×ブランド。ゴミ箱行も読む（削除の検知用）
+  const groups = {};
+  rowsAll('collectionLedger').forEach(r=>{
+    const b=brandOf(r['商品ID']); if(!b) return;
+    const t=String(r['対象受注']||'').split(',').map(x=>x.trim()).filter(x=>x && !x.startsWith('回収:'));
+    if(!t.length) return;
+    const g=groups[t.join(',')+'|'+b]=groups[t.join(',')+'|'+b]||{orders:t, brand:b, got:0, kids:new Set(), delKids:new Set()};
+    const kid=String(r['回収ID']||'').trim();
+    if(String(r['削除']||'').trim()!==''){ if(kid) g.delKids.add(kid); }
+    else { g.got+=num(r['個数']); if(kid) g.kids.add(kid); }
   });
-  return done;
+  const per = {};   // 受注ID → { ブランド: {done, partial, kids, delKids} }
+  Object.values(groups).forEach(g=>{
+    const need = g.orders.reduce((a,oid)=>a+((needBy[oid]||{})[g.brand]||0),0);
+    const done = g.got>0 && g.got>=need;
+    const partial = g.got>0 && g.got<need;
+    g.orders.forEach(oid=>{
+      const e=(per[oid]=per[oid]||{})[g.brand]=per[oid][g.brand]||{done:false, partial:false, kids:new Set(), delKids:new Set()};
+      if(done) e.done=true;
+      if(partial) e.partial=true;
+      g.kids.forEach(k=>e.kids.add(k)); g.delKids.forEach(k=>e.delKids.add(k));
+    });
+  });
+  return per;
 }
-// 振り分け未完了の案件（ステータス=振分/発注 で、まだ回収管理に入っていないブランドが残っているもの）
+// 回収IDの表示用: 連番なら K0032〜K0036、飛びがあれば列挙
+function kFmt(set){ const a=[...set].sort(); if(!a.length) return '';
+  const nums=a.map(k=>parseInt(String(k).replace(/\D/g,''),10));
+  const consec=a.length>1 && nums.every((n,i)=>i===0||n===nums[i-1]+1);
+  return consec ? a[0]+'〜'+a[a.length-1] : a.join('・'); }
+// 振り分け未完了の案件（ステータス=振分/発注 で、まだ数量が満ちていないブランドが残っているもの）
 function allocPending(){
-  const done = allocDoneMap();
+  const cov = allocCoverage();
   const g = {};
   rows('orderLedger').forEach(r=>{ if(String(r['ステータス']||'').trim()!=='振分/発注') return;
     const id=String(r['受注ID']||'').trim(); if(!id) return;
@@ -881,20 +907,39 @@ function allocPending(){
     const b=brandOf(r['商品ID']); if(b) g[id].brands.add(b);
   });
   return Object.values(g)
-    .map(o=>({id:o.id, w:o.w, rest:[...o.brands].filter(b=>!(done[o.id]&&done[o.id].has(b)))}))
+    .map(o=>({id:o.id, w:o.w, rest:[...o.brands].filter(b=>!((cov[o.id]||{})[b]||{}).done)}))
     .filter(o=>o.rest.length);
+}
+// 振り分けの一部が削除されて数量不足になっている案件（ステータス不問・事故検知）。
+// 全部削除=振り分けのやり直しは正常動作なのでアラートにしない（見た目が未振分に戻る）
+function allocBroken(){
+  const cov = allocCoverage();
+  const info = {};
+  rows('orderLedger').forEach(r=>{ const id=String(r['受注ID']||'').trim(); if(id && !info[id]) info[id]={w:r['卸先名']}; });
+  const out = [];
+  Object.entries(cov).forEach(([oid, brands])=>{ if(!info[oid]) return;
+    Object.entries(brands).forEach(([b, e])=>{
+      if(e.partial && !e.done && e.delKids.size) out.push({id:oid, w:info[oid].w, brand:b, kids:kFmt(e.kids), del:kFmt(e.delKids)});
+    });
+  });
+  return out;
 }
 
 function alertsHtml(){
   const al = DB.alerts || {stalled:[], overdue:[]};
   const pa = allocPending();   // 振り分け未完了（案件単位）
-  const n = (al.stalled||[]).length + (al.overdue||[]).length + pa.length;
+  const pb = allocBroken();    // 振り分けの一部削除による数量不足（事故検知・ステータス不問）
+  const n = (al.stalled||[]).length + (al.overdue||[]).length + pa.length + pb.length;
   if(!n) return '<div class="card"><span class="small" style="color:var(--good)"><b>✅ 要対応はありません</b></span>' +
     '<span class="muted small">　停滞案件・入金期限切れなし（しきい値はスプシ「アラート設定」シートで変更できます）</span></div>';
   return '<div class="card" style="border:1.5px solid var(--crit)"><b class="small" style="color:var(--crit)">⚠ 要対応 '+n+'件</b>' +
   (al.overdue.length ? '<div class="tblwrap" style="margin-top:8px"><table><tr><th>入金期限切れ</th><th>卸先</th><th>種類</th><th>期限</th><th class="num">超過</th><th class="num">金額(税込)</th><th>今の状態</th></tr>' +
     al.overdue.map(o=>'<tr><td class="mono">'+esc(o.docNo)+'</td><td>'+esc(o.name)+'</td><td class="small">'+esc(o.kind)+'</td><td class="small">'+esc(o.due)+'</td>' +
       '<td class="num" style="color:var(--crit)"><b>'+o.days+'日</b></td><td class="num">'+yen(o.amount)+'</td><td>'+pill(o.status)+'</td></tr>').join('')+'</table></div>' : '') +
+  (pb.length ? '<div class="tblwrap" style="margin-top:8px"><table><tr><th>振り分けの一部が削除されています（数量不足）</th><th>卸先</th><th>ブランド</th><th>残っている回収</th><th>削除された回収</th></tr>' +
+    pb.map(o=>'<tr><td class="mono">受注 '+esc(o.id)+'</td><td>'+esc(o.w)+'</td><td class="small">'+esc(o.brand)+'</td><td class="mono small">'+esc(o.kids||'—')+'</td>' +
+      '<td class="mono small" style="color:var(--crit)">'+esc(o.del)+'</td></tr>').join('') +
+    '</table><p class="muted small" style="margin:6px 0 0">回収・検品画面のゴミ箱から復元するか、振り分けをやり直してください</p></div>' : '') +
   (pa.length ? '<div class="tblwrap" style="margin-top:8px"><table><tr><th>振り分け未完了</th><th>卸先</th><th>残りブランド</th><th></th></tr>' +
     pa.map(o=>'<tr><td class="mono">受注 '+esc(o.id)+'</td><td>'+esc(o.w)+'</td><td class="small">'+esc(o.rest.join('・'))+'</td>' +
       '<td><button class="btn sm" onclick="go(\'allocation\');render()">🧮 振り分けへ</button></td></tr>').join('')+'</table></div>' : '') +
@@ -1773,7 +1818,7 @@ function allocCell(pid, sid, v){
 }
 function vAllocation(){
   const needSetup = !((DB.products&&DB.products.headers)||[]).includes('入数（箱）');
-  const done = allocDoneMap();   // 入れ込み済みの受注×ブランド（済み=グレーアウト表示。消さない）
+  const cov = allocCoverage();   // 入れ込み済みの受注×ブランド（数量ベース。済み=背景色つき表示・消さない）
   const selIds = Object.keys(ALLOC.sel).filter(k=>ALLOC.sel[k]);
   const brands = [...new Set(rows('orderLedger').filter(r=>ALLOC.sel[String(r['受注ID']||'').trim()]).map(r=>brandOf(r['商品ID'])||'（メーカー不明）'))].sort();
   if(brands.length && !brands.includes(ALLOC.brand)) ALLOC.brand = brands[0];
@@ -1801,12 +1846,14 @@ function vAllocation(){
     '<tr><th></th><th>受注ID</th><th>状態</th><th>卸先</th><th>ブランド</th><th>受注日</th><th class="num">明細数</th></tr>' +
     (olist.map(g=>{
       const open = (ALLOC.open||{})[g.id];
-      const doneSet = done[g.id]||new Set();
-      const isDone = g.brands.size>0 && [...g.brands].every(b=>doneSet.has(b));   // 全ブランド入れ込み済み=振分完了
+      const bc = cov[g.id]||{};
+      const mark = b=>{ const e=bc[b]; return e&&e.done ? '✅' : (e&&e.partial ? '⚠️' : ''); };
+      const isDone = g.brands.size>0 && [...g.brands].every(b=>bc[b]&&bc[b].done);   // 全ブランドの数量が満ちて=振分完了
+      const allK = new Set(); [...g.brands].forEach(b=>{ if(bc[b]) bc[b].kids.forEach(k=>allK.add(k)); });
       let h = '<tr style="cursor:pointer'+(isDone?';background:color-mix(in srgb,var(--muted) 18%,transparent);opacity:.62':'')+'" onclick="allocOpenToggle(\''+g.id+'\')">' +
         '<td onclick="event.stopPropagation()"><input type="checkbox" '+(ALLOC.sel[g.id]?'checked':'')+(isDone?' disabled':'')+' onclick="allocToggleOrder(\''+g.id+'\',this.checked)" style="width:16px;height:16px"></td>' +
-        '<td class="mono">'+(open?'▾':'▸')+' '+g.id+'</td><td>'+pill(g.st)+(isDone?' <span class="small" style="color:var(--good);font-weight:700">✅振分済み</span>':'')+'</td><td class="small">'+esc(g.w)+'</td>' +
-        '<td class="small">'+[...g.brands].map(b=>(doneSet.has(b)?'✅':'')+esc(b)).join('・')+'</td>' +
+        '<td class="mono">'+(open?'▾':'▸')+' '+g.id+'</td><td>'+pill(g.st)+(isDone?' <span class="small" style="color:var(--good);font-weight:700">✅振分済み</span>'+(allK.size?' <span class="mono small muted">'+esc(kFmt(allK))+'</span>':''):'')+'</td><td class="small">'+esc(g.w)+'</td>' +
+        '<td class="small">'+[...g.brands].map(b=>{ const e=bc[b]; const tip=e&&(e.kids.size||e.delKids.size)?' title="回収ID: '+esc(kFmt(e.kids)||'—')+(e.delKids.size?'／削除済み: '+esc(kFmt(e.delKids)):'')+'"':''; return '<span'+tip+'>'+mark(b)+esc(b)+'</span>'; }).join('・')+'</td>' +
         '<td class="small muted">'+esc(g.date)+'</td><td class="num">'+g.n+'</td></tr>';
       if(open){
         const lines = rows('orderLedger').filter(r=>String(r['受注ID']||'').trim()===g.id);
@@ -1823,12 +1870,14 @@ function vAllocation(){
   // 済み判定: 選択中の受注のうちブランドbを含む全受注が回収管理に入っていれば✅（グレーアウトで残す・2026-07-15 ユーザー指定）
   const selOrders = rows('orderLedger').filter(r=>ALLOC.sel[String(r['受注ID']||'').trim()]);
   const brandDone = b=>{ const t=selOrders.filter(r=>(brandOf(r['商品ID'])||'（メーカー不明）')===b);
-    return t.length>0 && t.every(r=>{ const ds=done[String(r['受注ID']).trim()]; return ds && ds.has(b); }); };
+    return t.length>0 && t.every(r=>(((cov[String(r['受注ID']).trim()]||{})[b])||{}).done); };
   html += '<div class="tabs">'+brands.map(b=>'<button class="'+(b===ALLOC.brand?'on':'')+'"'+(brandDone(b)?' style="background:color-mix(in srgb,var(--muted) 18%,transparent);opacity:.62"':'')+' onclick="ALLOC.brand=\''+esc(b)+'\';render()">'+(brandDone(b)?'✅':'')+esc(b)+'</button>').join('')+'</div>';
   const brand = ALLOC.brand;
   if(brandDone(brand)){
+    const ks = new Set(); selOrders.forEach(r=>{ const e=(cov[String(r['受注ID']).trim()]||{})[brand]; if(e) e.kids.forEach(k=>ks.add(k)); });
     html += '<div class="card" style="opacity:.8"><b class="small">✅ '+esc(brand)+' は回収・検品へ入れ込み済みです</b>' +
-      '<p class="muted small" style="margin:6px 0 0">振り分けた内容は回収・検品画面の該当回収（メモ「'+esc(brand)+' 振り分け」）で確認できます。やり直す場合は回収・検品側で該当の回収を削除するとここが再び操作できるようになります</p></div>';
+      '<p class="small" style="margin:6px 0 0"><b>回収ID: '+esc(kFmt(ks)||'—')+'</b>（回収・検品画面で確認・印刷できます）</p>' +
+      '<p class="muted small" style="margin:6px 0 0">やり直す場合は回収・検品側で該当の回収を削除するとここが再び操作できるようになります（一部だけ削除すると数量不足として要対応アラートに出ます）</p></div>';
     return html;
   }
   const conf = ALLOC.conf[brand]||{};
