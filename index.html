@@ -1062,6 +1062,13 @@ function tabsHtml(entity, cur, counts, extraTabs, activeExtras){
     return '<button class="'+(t===cur?'on':'')+'" onclick="setVS(\'tab\',\''+t+'\')">'+t+'<span class="n'+(hot?' hot':'')+'">'+n+'</span></button>';
   }).join('') + '</div>';
 }
+let _covMemo = {a:null, b:null, val:null};   // allocCoverageのメモ化（journeyは受注カードごとに呼ばれるため。台帳の参照が変わったら再計算）
+function allocCoverageMemo(){
+  if(_covMemo.a!==DB.collectionLedger || _covMemo.b!==DB.orderLedger){
+    _covMemo = {a:DB.collectionLedger, b:DB.orderLedger, val:allocCoverage()};
+  }
+  return _covMemo.val;
+}
 function journeyHtml(g, ship){
   // 一気通貫ビュー: 支払方式（半金×2/掛け払い）× 経由の有無 でフローを出し分ける（2026-07-15 ユーザー指定）。
   // 裏のステータスは1本のまま。掛け払いは「全額請求→入金を待たずに進行→納品→翌月末入金」で入金が最後に来る。
@@ -1075,10 +1082,15 @@ function journeyHtml(g, ship){
   const inv2Done = docs.some(k=>k.indexOf('請求書②')>=0) || g.st==='最終入金完了';   // 請求②発行済み（完了案件は発行済み扱い）
   const viaMoneyDone = docs.some(k=>k.indexOf('発注書（'+NM.via)===0);   // 経由先→自社の帳票処理は発注書の発行が起点
   const mf = g.via ? '/マネフォ' : '';   // 経由案件の請求はマネフォ申請→承認→押印請求書→入金
+  // 振分=回収台帳の数量充足で自動判定／発注=発注サイトでの手動注文が別作業のため分離（済み=ステータスを回収中へ進めた時。2026-07-16 ユーザー指定）
+  const cov = allocCoverageMemo();
+  const obrands = new Set(); (g.rows||[]).forEach(r=>{ const b=brandOf(r['商品ID']); if(b) obrands.add(b); });
+  const allocDone = obrands.size>0 && [...obrands].every(b=>(((cov[String(g.id||'').trim()]||{})[b])||{}).done);
   const steps = isCredit ? [
     ['受注', true],
     ['全額請求（'+NM.credit+(g.via?'・'+NM.via:'')+'）', oi>=1],   // 発行と同時にステータス前進。入金は待たない
-    ['振分/発注', oi>=3],
+    ['振分', oi>=3 || allocDone],
+    ['発注', oi>=3],
     ['回収', oi>=4],
     ['検品/ロット処理', oi>=5],
     ['引去', shipPicked],
@@ -1088,7 +1100,8 @@ function journeyHtml(g, ship){
     ['受注', true],
     ['半金①請求'+mf+(g.via?'（'+NM.via+'）':''), oi>=1],
     ['半金①入金', !!g.in1 || oi>=2],
-    ['振分/発注', oi>=3]      // 回収中に入った = 振り分け・発注済み
+    ['振分', oi>=3 || allocDone],
+    ['発注', oi>=3]      // 回収中に入った = 発注済み
   ].concat(g.via ? [[NM.via+'→'+NM.co+'処理', viaMoneyDone]] : []).concat([
     ['回収', oi>=4],          // 検品/ロット処理中に入った = 回収済み
     ['検品/ロット処理', oi>=5],   // 最終入金待ちに入った = 検品・ロット処理済み
