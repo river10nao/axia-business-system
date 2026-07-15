@@ -1049,8 +1049,10 @@ function vOrders(){
     const canShip = !ship && ['最終入金待ち','最終入金完了'].includes(g.st);
     // 開閉状態は viewState.open に記憶（帳票発行などの再描画で閉じてしまわないように）
     const isOpen = viewState.open && viewState.open[g.id];
-    return '<details class="ordcard" '+(isOpen?'open':'')+' ontoggle="(viewState.open=viewState.open||{})[\''+g.id+'\']=this.open"><summary>' + selBox(g.id) +
-      '<b>'+g.id+'</b> '+pill(g.st)+' '+readyBadge(g, ship)+(g.via?' <span class="pill" style="background:color-mix(in srgb,var(--s5) 14%,transparent);color:var(--s5)">🔁 '+NM.via+'経由</span>':'')+' <span>'+esc(g.w)+'</span><span class="muted small">'+esc(g.date)+' / '+esc(g.pay||'')+' / '+esc(g.form||'')+'</span>' +
+    // 全て完了した案件は薄緑の背景で一目で分かるように（お金=最終入金完了 かつ モノ=出荷完了 or 出荷なし。2026-07-16 ユーザー指定）
+    const allDone = g.st==='最終入金完了' && (!ship || ship['ステータス']==='出荷完了');
+    return '<details class="ordcard" '+(isOpen?'open':'')+(allDone?' style="background:color-mix(in srgb,var(--good) 7%,transparent);border-color:color-mix(in srgb,var(--good) 30%,var(--grid))"':'')+' ontoggle="(viewState.open=viewState.open||{})[\''+g.id+'\']=this.open"><summary>' + selBox(g.id) +
+      '<b>'+g.id+'</b> '+pill(g.st)+(allDone?' <span class="small" style="color:var(--good);font-weight:700">✅完了</span>':'')+' '+readyBadge(g, ship)+(g.via?' <span class="pill" style="background:color-mix(in srgb,var(--s5) 14%,transparent);color:var(--s5)">🔁 '+NM.via+'経由</span>':'')+' <span>'+esc(g.w)+'</span><span class="muted small">'+esc(g.date)+' / '+esc(g.pay||'')+' / '+esc(g.form||'')+'</span>' +
       '<span class="right mono"><b>'+yen(total)+'</b> <span class="muted small">税抜</span></span></summary>' +
       '<div style="margin-top:10px">'+journeyHtml(g, ship)+'</div>' +
       '<div class="tblwrap" style="margin-top:8px"><table><tr><th>商品</th><th>容量</th><th class="num">個数</th><th class="num">定価</th><th class="num">掛率</th><th class="num">卸値</th><th class="num">小計(税抜)</th></tr>' +
