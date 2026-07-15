@@ -500,7 +500,15 @@ function vDashboard(){
   // 受注ID→ステータス/支払方式/出荷（2軸ピルと入金予定の判定に使う）
   const oInfo = {};
   rows('orderLedger').forEach(r=>{ const id=String(r['受注ID']||'').trim(); if(!id) return;
-    oInfo[id] = oInfo[id] || {st:r['ステータス'], pay:r['支払方式'], via:String(r[NM.via+'経由']||'').trim()!==''}; });
+    oInfo[id] = oInfo[id] || {st:r['ステータス'], pay:r['支払方式'], odate:r['受注日'], via:String(r[NM.via+'経由']||'').trim()!==''}; });
+  // 掛け払い案件の自社着金予定日（卸先→掛け払い会社の支払期日=翌月末とは別物）。
+  // 2026/07受注のみ翌々月5日=導入初月の特例（2026-07-15 ユーザー連絡）、2026/08以降の受注は受注月の翌月末
+  const creditRecv = oid=>{ const info=oInfo[String(oid||'').trim()]||{};
+    if(!NM.credit || String(info.pay||'').indexOf(NM.credit)!==0) return '';
+    const om=String(info.odate||'').match(/^(\d{4})\/(\d{1,2})/); if(!om) return '';
+    if(om[1]==='2026' && +om[2]===7) return '2026/09/05';
+    const d=new Date(+om[1], +om[2]+1, 0);   // 受注月+1ヶ月の末日 = 翌月末
+    return d.getFullYear()+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+String(d.getDate()).padStart(2,'0'); };
   const shipOf = {};
   rows('shipments').forEach(sp=>{ const id=String(sp['受注ID']||'').trim(); if(id && !shipOf[id]) shipOf[id]=sp; });
 
@@ -513,7 +521,9 @@ function vDashboard(){
     if(!st) return false;
     if(kind==='請求書（全額）'||kind===NM.via+'請求書（全額）') return st!=='最終入金完了';   // 全額1枚 = 入金完了までずっと待ち
     return (DOC_PEND_RULES[kind]||[]).includes(st);
-  }).sort((a,b)=>String(a['支払期限']||'9999').localeCompare(String(b['支払期限']||'9999')));
+  }).map(d=>{ const rv=creditRecv(d['受注ID']);   // 掛け払い案件は「自社に入る日=着金予定」で並べ・期限切れ判定する
+    d._due = rv || String(d['支払期限']||'').trim(); d._recv = !!rv; return d;
+  }).sort((a,b)=>String(a._due||'9999').localeCompare(String(b._due||'9999')));
 
   // 月次バーチャート（1本に集約: 下段=仕入・上段=利益・バー全体の高さ=売上。点線=売上目標）
   // 実運用開始の2026/05から対象月まで全部並べる。月数が増えたら横スクロール
@@ -639,11 +649,11 @@ function vDashboard(){
   const FO_ = FLOW.order;
   const docMD = d=>String(d['発行日']||'').trim().replace(/^\d{4}\//,'');   // 発行日 → M/D 表示
   // 入金済みの判定（入金予定 DOC_PEND_RULES の裏返し）: ①は半金入金待ちを過ぎたら、②・全額は最終入金完了で入金済み
-  const docPaid = d=>{ const kind=String(d['種類']||''); if(kind.indexOf('請求書')<0) return false;
+  const docSettled = d=>{ const kind=String(d['種類']||''); if(kind.indexOf('請求書')<0) return false;
     const st=(oInfo[String(d['受注ID']||'').trim()]||{}).st; if(!st || !FO_.includes(st)) return false;
     return kind.indexOf('①')>=0 ? FO_.indexOf(st) > FO_.indexOf('半金入金待ち') : st==='最終入金完了'; };
-  const paidDocs = rows('docLog').filter(d=>monthOf(d['発行日'])===m && docPaid(d));
-  const cashInDone = paidDocs.reduce((a,d)=>a+num(d['金額（税込）']),0);      // 確定分 = 今月発行の請求書で入金済み
+  const settledDocs = rows('docLog').filter(d=>monthOf(d['発行日'])===m && docSettled(d));
+  const cashInDone = settledDocs.reduce((a,d)=>a+num(d['金額（税込）']),0);      // 確定分 = 今月発行の請求書で入金済み
   const cashInPend = pendDocs.reduce((a,d)=>a+num(d['金額（税込）']),0);      // 予定分 = 未入金の発行済み請求書（月を跨いだ分も入金まで残る）
   const cashIn = cashInDone + cashInPend;
   const spLines = calcSalonPay(m);
@@ -666,7 +676,7 @@ function vDashboard(){
     .sort((a,b)=>num(b['金額（税込）'])-num(a['金額（税込）']))
     .map((d,i)=>{ const w=String(d['卸先名']||'').trim()||'（卸先不明）'; const md=docMD(d);
       return {label:w+(striped&&md?' '+md+'請求':''), v:num(d['金額（税込）']), color, alt:i%2===1, striped,
-        tip:tipPrefix+'：'+w+(md?'（'+md+'請求'+(striped?'・期限'+(String(d['支払期限']||'').trim()||'—'):'')+'）':'')}; });
+        tip:tipPrefix+'：'+w+(md?'（'+md+'請求'+(striped?'・'+(d._recv?'着金':'期限')+(d._due||String(d['支払期限']||'').trim()||'—'):'')+'）':'')}; });
   const segBg = s=>s.striped
     ? 'background:repeating-linear-gradient(45deg,'+s.color+' 0 5px,color-mix(in srgb,'+s.color+' 55%,transparent) 5px 10px);'
     : 'background:'+s.color+';';
@@ -677,7 +687,7 @@ function vDashboard(){
     '<div style="display:flex;height:20px;border-radius:10px;background:var(--wash);overflow:hidden;margin-top:4px">'+inner+'</div></div>';
   const cashHtml =
     cashRow('💰 入金', cashIn, 'ベタ塗り=確定 '+yen(cashInDone)+'（入金済み）／斜線=予定 '+yen(cashInPend)+'（未入金の請求書 '+pendDocs.length+'枚・税込）',
-      segsHtml(docSegs(paidDocs, 'var(--s2)', false, '入金済み').concat(
+      segsHtml(docSegs(settledDocs, 'var(--s2)', false, '入金済み').concat(
         docSegs(pendDocs, 'var(--s2)', true, '入金予定')))) +
     cashRow('📤 出金', cashOut, 'ベタ塗り=確定 '+yen(cashOutDone)+'（支払済み扱い）／斜線=予定: <span style="color:var(--s3)">■</span>仕入 '+yen(cashOutBuy)+'（進行中・税抜）＋<span style="color:var(--s5)">■</span>サロン支払 '+yen(cashOutSalon)+'（翌月末）',
       segsHtml(toSegs(buyDoneByW, 'var(--s3)', '仕入支払済み', false).concat(
@@ -685,16 +695,18 @@ function vDashboard(){
         spLines.filter(l=>l.net>0).sort((a,b)=>b.net-a.net).map((l,i)=>({label:l.name, v:l.net, color:'var(--s5)', alt:i%2===1, striped:true, tip:'サロン支払予定：'+l.name}))))) +
     cashRow('🧮 差引の手残り（概算）', cashNet, '',
       segsHtml([{label:cashNet>=0?'手残り':'不足', v:Math.abs(cashNet), color:cashNet>=0?'var(--good)':'var(--crit)', tip:'差引の'+(cashNet>=0?'手残り':'不足分')}])) +
-    '<p class="muted small" style="margin-top:8px">入金の確定＝今月発行の請求書で入金済みのもの（受注のステータス操作で斜線の予定→ベタ塗りの確定に移ります）。出金の確定＝今月受注で完了した案件の仕入（支払済み扱い・暫定）。'+NM.credit+'案件の入金は翌月末・'+NM.via+'経由は卸先入金後すぐ</p>';
+    '<p class="muted small" style="margin-top:8px">入金の確定＝今月発行の請求書で入金済みのもの（受注のステータス操作で斜線の予定→ベタ塗りの確定に移ります）。出金の確定＝今月受注で完了した案件の仕入（支払済み扱い・暫定）。'+NM.credit+'案件の自社着金は 2026/07受注分のみ翌々月5日（9/5）・8月以降の受注は翌月末（卸先→'+NM.credit+'の支払期日は常に翌月末）・'+NM.via+'経由は卸先入金後すぐ</p>';
 
   // 入金予定テーブル（請求書ベース: 誰から・いつ・いくら。期限切れは赤）
   const todayStr = today();
   const pendHtml = '<div class="card"><b class="small">💴 入金予定（発行済み請求書ベース）</b><div class="tblwrap" style="margin-top:8px">' +
     '<table><tr><th>支払期限</th><th>卸先（誰から）</th><th>種類</th><th class="num">金額（税込）</th><th>管理番号</th><th>受注ID</th></tr>' +
     (pendDocs.map(d=>{
-      const due = String(d['支払期限']||'').trim();
+      const due = d._due;
       const overdue = due && due < todayStr;
-      return '<tr><td class="small"'+(overdue?' style="color:var(--crit);font-weight:700"':'')+'>'+esc(due||'—')+(overdue?' ⚠':'')+'</td>' +
+      // 掛け払い案件: 表示・期限切れ判定とも着金予定日。卸先→掛け払い会社の支払期日（帳票に印字した日付）はホバーで見せる
+      const dueHtml = esc(due||'—') + (d._recv ? ' <span class="muted" title="卸先の支払期日（帳票印字）は '+esc(String(d['支払期限']||'').trim()||'—')+'">着金</span>' : '');
+      return '<tr><td class="small"'+(overdue?' style="color:var(--crit);font-weight:700"':'')+'>'+dueHtml+(overdue?' ⚠':'')+'</td>' +
         '<td>'+esc(d['卸先名'])+'</td><td class="small">'+esc(d['種類'])+'</td>' +
         '<td class="num"><b>'+yen(num(d['金額（税込）']))+'</b></td><td class="mono small">'+esc(d['管理番号'])+'</td><td class="mono small">'+esc(d['受注ID'])+'</td></tr>';
     }).join('') || '<tr><td colspan="6" class="muted">入金待ちの請求書はありません</td></tr>') +
@@ -706,7 +718,7 @@ function vDashboard(){
   '<div class="kpis">' +
     kpi(m+' 売上（税抜）', yen(s.sales)) +
     kpi('利益（概算）', yen(s.profit), s.sales>0 ? '利益率 '+Math.round(s.profit/s.sales*100)+'%' : '') +
-    kpi('入金待ちの請求書', pendDocs.length+'枚', pendDocs.length ? '直近期限 '+(String(pendDocs[0]['支払期限']||'').trim()||'—') : '') +
+    kpi('入金待ちの請求書', pendDocs.length+'枚', pendDocs.length ? '直近'+(pendDocs[0]._recv?'着金':'期限')+' '+(pendDocs[0]._due||'—') : '') +
     kpi('余剰在庫（税抜）', yen(surplusValue), surplus.length ? surplus.reduce((a,r)=>a+num(r['残数']),0)+'点 / '+surplus.length+'ロット' : '売れ残りなし') +
     kpi('検品待ち', nInspect+'案件') +
     kpi('出荷 進行中', nShip+'案件') +
@@ -1110,12 +1122,17 @@ function docFormHtml(orderId){
       esc(r['商品名'])+' '+esc(r['容量'])+' × '+esc(r['個数'])+'（'+yen(num(r['小計（税抜）']))+' 税抜）</label>').join('') + '</div>';
   const isVia = lines.length && String(lines[0][NM.via+'経由']||'').trim()!=='';
   const kindOpts = DOC_KIND_UI.concat(isVia ? DOC_KIND_UI_VIA() : []);
+  // 掛け払い案件: 卸先→掛け払い会社の支払期日は受注月の翌月末で固定なので期限①へ自動入力（手直しも可）
+  let creditDue = '';
+  if(NM.credit && lines.length && String(lines[0]['支払方式']||'').indexOf(NM.credit)===0){
+    const om=String(lines[0]['受注日']||'').match(/^(\d{4})\/(\d{1,2})/);
+    if(om){ const d=new Date(+om[1], +om[2]+1, 0); creditDue=d.toLocaleDateString('sv-SE'); } }
   return '<div class="card" style="margin-top:10px;background:var(--wash)"><b class="small">📄 帳票発行（'+orderId+'）'+(isVia?' <span class="pill" style="background:color-mix(in srgb,var(--s5) 14%,transparent);color:var(--s5)">🔁 '+NM.via+'経由</span>':'')+'</b>' +
     '<div class="row" style="margin-top:8px">' +
     '<label class="small">種類<br><select id="docKind">'+kindOpts.map(k=>'<option value="'+k[0]+'">'+k[1]+'</option>').join('')+'</select></label>' +
     '<label class="small">名義<br><select id="docIssuer"><option>'+NM.via+'</option><option>'+NM.co+'</option></select></label>' +
     '<label class="small">発行日（帳票に載る日付）<br><input type="date" id="docDate" value="'+t+'"></label>' +
-    '<label class="small">支払期限①（請求書①・全額用。空欄で当月末）<br><input type="date" id="docDue"></label>' +
+    '<label class="small">支払期限①（請求書①・全額用。空欄で当月末'+(creditDue?'。'+NM.credit+'案件=受注月の翌月末を自動入力':'')+'）<br><input type="date" id="docDue" value="'+creditDue+'"></label>' +
     '<label class="small">支払期限②（請求書②用・空欄で翌月末）<br><input type="date" id="docDue2"></label>' +
     '</div>' + itemsHtml +
     '<div class="row" style="margin-top:10px">' +
