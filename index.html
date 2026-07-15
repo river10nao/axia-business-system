@@ -1216,7 +1216,7 @@ function docFormHtml(orderId){
   return '<div class="card" style="margin-top:10px;background:var(--wash)"><b class="small">📄 帳票発行（'+orderId+'）'+(isVia?' <span class="pill" style="background:color-mix(in srgb,var(--s5) 14%,transparent);color:var(--s5)">🔁 '+NM.via+'経由</span>':'')+'</b>' +
     '<div class="row" style="margin-top:8px">' +
     '<label class="small">種類<br><select id="docKind">'+kindOpts.map(k=>'<option value="'+k[0]+'">'+k[1]+'</option>').join('')+'</select></label>' +
-    '<label class="small">名義<br><select id="docIssuer"><option>'+NM.via+'</option><option>'+NM.co+'</option></select></label>' +
+    '<label class="small">名義<br><select id="docIssuer"><option>'+NM.co+'</option><option>'+NM.via+'</option></select></label>' +
     '<label class="small">発行日（帳票に載る日付）<br><input type="date" id="docDate" value="'+t+'"></label>' +
     '<label class="small">支払期限①（請求書①・全額用。空欄で当月末'+(creditDue?'。'+NM.credit+'案件=受注月の翌月末を自動入力':'')+'）<br><input type="date" id="docDue" value="'+creditDue+'"></label>' +
     '<label class="small">支払期限②（請求書②用・空欄で翌月末）<br><input type="date" id="docDue2"></label>' +
