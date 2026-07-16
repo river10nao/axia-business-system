@@ -393,16 +393,22 @@ function actKey(action, payload){
   return action;
 }
 function busy(entity, id){ return inflight.has(entity + ':' + id); }
-// 操作が影響するシートの推定（entityベース）。特定できる操作は応答同梱=1往復で済ませる
+// 操作が影響するシートの推定（entityベース）。now=応答に同梱して即反映（1往復）／later=裏で更新（在庫系は次の画面遷移までに届けば足りる）
 const ENTITY_SHEETS = {
-  order:      ['orderLedger'],
-  collection: ['collectionLedger','orderLedger','stock','stockLog'],   // 回収の前進は受注の自動前進＋入庫を伴いうる
-  shipment:   ['shipments','stock','stockLog','orderLedger'],
-  hanbai:     ['hanbaiOrders','stock','stockLog']
+  order:      {now:['orderLedger'], later:[]},
+  collection: {now:['collectionLedger','orderLedger'], later:['stock','stockLog']},   // 回収の前進は受注の自動前進＋入庫を伴いうる
+  shipment:   {now:['shipments','orderLedger'], later:['stock','stockLog']},
+  hanbai:     {now:['hanbaiOrders'], later:['stock','stockLog']}
 };
 function sheetsFor(action, payload){
   const ent = payload && payload.entity;
   return (ent && ENTITY_SHEETS[ent]) ? ENTITY_SHEETS[ent] : null;
+}
+// 裏読み: 指定シートを並列取得して届き次第画面へ反映（操作の完了は待たせない）
+function refreshSoon(names){
+  if(!names || !names.length) return;
+  Promise.all(names.map(async n => { DB[n] = await apiGet(n); }))
+    .then(()=>{ saveSnap(); render(); }).catch(()=>{});
 }
 function busyPill(){ return '<span class="pill" style="background:color-mix(in srgb,var(--muted) 15%, transparent);color:var(--muted)">⏳ 処理中…</span>'; }
 async function act(action, payload, okMsg, reloadNames){
@@ -410,11 +416,13 @@ async function act(action, payload, okMsg, reloadNames){
   if(inflight.has(key)){ toast('この対象は処理中です。完了までお待ちください', true); return; }
   inflight.add(key); render();   // 対象カードだけ「処理中…」表示になる
   try{
-    const names = reloadNames || sheetsFor(action, payload);
+    const spec = sheetsFor(action, payload);
+    const names = reloadNames || (spec && spec.now);
     if(names){
-      // 影響シートが分かる操作は応答に最新シートを同梱してもらい往復1回で完結。要対応（重い）は裏で更新
+      // 影響シートが分かる操作は応答に最新シートを同梱してもらい往復1回で完結。在庫系・要対応（重い）は裏で更新
       const r = await apiPost(action, payload, names);
       toast(okMsg || '完了しました');
+      if(spec && !reloadNames) refreshSoon(spec.later);
       refreshAlerts();
       return r;
     }
