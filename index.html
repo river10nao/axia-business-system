@@ -1103,6 +1103,12 @@ function vOrders(){
   const shipsByOrder = {};
   rows('shipments').forEach(sp=>{ if(sp['受注ID']) shipsByOrder[sp['受注ID']]=sp; });
 
+  // 完了案件（お金=最終入金完了 かつ モノ=出荷完了 or 出荷なし）は「すべて」タブでは下の「✅完了分」に固める（2026-07-16 ユーザー指定）
+  // 最終入金完了でも出荷が残っている案件は作業中なので上に残す。個別タブでは絞り込み結果をそのまま出す
+  const isDoneGrp = g => { const sp=shipsByOrder[g.id]; return g.st==='最終入金完了' && (!sp || sp['ステータス']==='出荷完了'); };
+  const doneList = tab==='すべて' ? list.filter(isDoneGrp) : [];
+  const activeList = tab==='すべて' ? list.filter(g=>!isDoneGrp(g)) : list;
+
   // 在庫の充足チェック用: 商品IDごとの残数合計（店販ロットは卸出荷に使わないため除外）
   // ※複数案件が同じ在庫を取り合うケースまでは見ない簡易判定（引去時はサーバー側で正確にチェックされる）
   const stockAvail = {};
@@ -1134,8 +1140,15 @@ function vOrders(){
     '<button class="btn right" onclick="exportTable(\'受注台帳\',\'orderLedger\')">CSV出力</button></div>' +
   (viewState.newOrder ? newOrderForm() : '') +
   tabsHtml('order', tab, counts) +
-  '<div class="row" style="margin-bottom:10px">'+bulkBar('order', list.map(g=>g.id))+'</div>' +
-  (list.map(g=>{
+  '<div class="row" style="margin-bottom:10px">'+bulkBar('order', activeList.map(g=>g.id))+'</div>' +   // 全選択は表示中（完了分を除く）が対象
+  (activeList.map(cardHtml).join('') || (doneList.length ? '' : '<p class="muted">該当する受注がありません</p>')) +
+  // 完了分は下に固めて開閉式でまとめる（2026-07-16 ユーザー指定）。「すべて」タブのみ。完了タブでは普通に一覧表示
+  (doneList.length ? '<details class="ordcard" '+(viewState.doneOpen?'open':'')+' ontoggle="viewState.doneOpen=this.open" style="background:color-mix(in srgb,var(--good) 5%,transparent);border-color:color-mix(in srgb,var(--good) 30%,var(--grid))">' +
+    '<summary class="small" style="color:var(--good);font-weight:700">✅ 完了分（'+doneList.length+'件）— クリックで開閉</summary>' +
+    '<div style="margin-top:10px">'+doneList.map(cardHtml).join('')+'</div></details>' : '') +
+  trashSection('order', 'orderLedger', '受注ID', r=>String(r['卸先名']||'')+' '+String(r['受注日']||''));
+
+  function cardHtml(g){
     const total = g.rows.reduce((a,r)=>a+num(r['小計（税抜）']),0);
     const ship = shipsByOrder[g.id];
     // 出荷作成は回収・在庫が進んだ段階（最終入金待ち以降）のみ（サーバー側でも同条件でガード）
@@ -1161,8 +1174,7 @@ function vOrders(){
       docFormHtml(g.id) +
       docListHtml(g.id) +
       '</details>';
-  }).join('') || '<p class="muted">該当する受注がありません</p>') +
-  trashSection('order', 'orderLedger', '受注ID', r=>String(r['卸先名']||'')+' '+String(r['受注日']||''));
+  }
 }
 function tabsHtml(entity, cur, counts, extraTabs, activeExtras){
   const flow = FLOW[entity];
