@@ -1638,9 +1638,10 @@ function vCollection(){
       ? '<button class="btn sm" onclick="act(\'advanceStatus\',{entity:\'collection\',id:\''+g.id+'\',to:\'ロット処理なし\'},\''+g.id+' をロット処理なしで入庫しました\')">✔ ロット処理なしで入庫</button>' : '';
     // 開閉状態を記憶（未指定なら「処理が終わっていないものは開く」の既定）
     const isOpenC = viewState.open && (g.id in viewState.open) ? viewState.open[g.id] : !done;
+    const cBrands = [...new Set(g.rows.map(r=>brandOf(r['商品ID'])).filter(Boolean))].join('・');   // 対象受注の横に表示するブランド（複数は「・」列挙。2026-07-17 ユーザー指定）
     return '<details class="ordcard" '+(isOpenC?'open':'')+' ontoggle="(viewState.open=viewState.open||{})[\''+g.id+'\']=this.open"><summary>' + selBox(g.id) +
       '<b>'+g.id+'</b> '+pill(g.st)+' <span>'+esc(g.salon)+'</span><span class="muted small">'+esc(g.date)+' / '+esc(g.kubun||'卸')+'</span>' +
-      (String(g.rows[0]['対象受注']||'').trim() ? '<span class="muted small">📋 '+esc(g.rows[0]['対象受注'])+'</span>' : '') +
+      (String(g.rows[0]['対象受注']||'').trim() ? '<span class="muted small">📋 '+esc(g.rows[0]['対象受注'])+(cBrands?' '+esc(cBrands):'')+'</span>' : '') +
       '<span class="right mono">'+qty+'点</span></summary>' +
       '<div class="tblwrap" style="margin-top:8px"><table><tr><th>商品</th><th>容量</th><th class="num">個数</th><th>在庫ID</th></tr>' +
       g.rows.map(r=>'<tr><td>'+esc(r['商品名'])+'</td><td>'+esc(r['容量'])+'</td><td class="num">'+r['個数']+'</td><td class="mono small">'+esc(r['在庫ID']||'—')+'</td></tr>').join('') +
