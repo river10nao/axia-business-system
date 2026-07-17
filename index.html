@@ -1161,17 +1161,21 @@ function vOrders(){
       '<b>'+g.id+'</b> '+pill(g.st)+(allDone?' <span class="small" style="color:var(--good);font-weight:700">✅完了</span>':'')+' '+readyBadge(g, ship)+(g.via?' <span class="pill" style="background:color-mix(in srgb,var(--s5) 14%,transparent);color:var(--s5)">🔁 '+NM.via+'経由</span>':'')+' <span>'+esc(g.w)+'</span><span class="muted small">'+esc(g.date)+' / '+esc(g.pay||'')+' / '+esc(g.form||'')+'</span>' +
       '<span class="right mono"><b>'+yen(total)+'</b> <span class="muted small">税抜</span></span></summary>' +
       '<div style="margin-top:10px">'+journeyHtml(g, ship)+'</div>' +
-      // 発注日（仕入をどの月の支払いに乗せるかの基準。日付の明示入力必須=適当な日のボタン連打防止。2026-07-17 支払い設計）
-      (FLOW.order.indexOf(g.st)>=2 ? '<div class="row small" style="margin-top:8px;align-items:center;gap:8px">📦 発注日: ' +
-        '<input type="date" id="ord'+g.id+'" value="'+esc(String(g.ord||'').trim().replace(/\//g,'-'))+'" style="padding:4px 8px">' +
-        '<button class="btn sm" onclick="saveOrderDate(\''+g.id+'\')">保存</button>' +
-        (String(g.ord||'').trim() ? '<span class="muted small">記録済み（直すときは日付を変えて保存）</span>'
-          : '<span class="muted small">※実際にディーラーへ発注した日を入れてください。どの月の支払いに乗るかの基準になり、ズレるとディーラーからの請求書と合わなくなります</span>') +
-        '</div>' : '') +
       '<div class="tblwrap" style="margin-top:8px"><table><tr><th>商品</th><th>容量</th><th class="num">個数</th><th class="num">定価</th><th class="num">掛率</th><th class="num">卸値</th><th class="num">小計(税抜)</th></tr>' +
       g.rows.map(r=>'<tr><td>'+esc(r['商品名'])+'</td><td>'+esc(r['容量'])+'</td><td class="num">'+r['個数']+'</td><td class="num">'+yen(num(r['定価（税抜）']))+'</td><td class="num">'+(isNaN(num(r['掛け率']))||String(r['掛け率']).trim()===''?esc(r['掛け率']):pctDisp(num(r['掛け率'])))+'</td><td class="num">'+yen(num(r['卸値（税抜）']))+'</td><td class="num">'+yen(num(r['小計（税抜）']))+'</td></tr>').join('') +
       '</table></div>' +
-      '<div class="row" style="margin-top:10px">' + advanceBtn('order', g.id, g.st) +
+      // 発注日はステータスボタンの真上。未入力のまま回収中へ進めない（スルー事故防止。サーバー側にも同じガード。2026-07-17 ユーザー指定）
+      (FLOW.order.indexOf(g.st)>=2 ? (()=>{ const ordEmpty = !String(g.ord||'').trim();
+        return '<div class="row small" style="margin-top:10px;align-items:center;gap:8px'+(ordEmpty&&g.st==='振分/発注'?';padding:8px 10px;border:1.5px dashed var(--warn);border-radius:8px':'')+'">📦 <b>発注日</b>: ' +
+        '<input type="date" id="ord'+g.id+'" value="'+esc(String(g.ord||'').trim().replace(/\//g,'-'))+'" style="padding:4px 8px">' +
+        '<button class="btn sm" onclick="saveOrderDate(\''+g.id+'\')">保存</button>' +
+        (ordEmpty ? '<span class="small" style="color:var(--ink2)"><b>※入力しないと「回収中」へ進めません。</b>実際にディーラーへ発注した日＝どの月の支払いに乗るかの基準です（ズレるとディーラー請求書と合いません）</span>'
+          : '<span class="muted small">記録済み（直すときは日付を変えて保存）</span>') +
+        '</div>'; })() : '') +
+      '<div class="row" style="margin-top:10px">' +
+      (g.st==='振分/発注' && !String(g.ord||'').trim()
+        ? '<button class="btn sm" onclick="toast(\'先に📦発注日を入れてください（実際に発注した日）\', true)" style="opacity:.55">✔ 発注済み（→ 回収中）</button>'
+        : advanceBtn('order', g.id, g.st)) +
       (canShip && !busy('order', g.id) ? '<button class="btn sm" onclick="act(\'createShipment\',{受注ID:\''+g.id+'\'},\'出荷を作成しました\',[\'shipments\'])">🚚 出荷を作成</button>' : '') +
       (ship ? '<span class="small muted">出荷: '+ship['出荷ID']+' '+pill(ship['ステータス'])+'</span>' : '') +
       '<button class="btn sm" onclick="viewState.docFor=(viewState.docFor===\''+g.id+'\'?null:\''+g.id+'\');render()">📄 帳票発行</button>' +
@@ -1250,17 +1254,23 @@ function journeyHtml(g, ship){
     return '<span class="step"><span class="dot '+cls+'"></span>'+s[0]+'</span>';
   }).join('<span style="color:var(--grid)">—</span>') + '</div>';
 }
+// ステータスボタンは「何をしたか（〇〇済み）」で書き、（→ 移動先）を添える（ボタンと状態の不一致が分かりにくい、の2026-07-17 ユーザー要望）
+const ADV_ACTION = {
+  order:      {'半金入金待ち':'請求済み','振分/発注':'半金①入金済み','回収中':'発注済み','検品/ロット処理中':'回収済み','最終入金待ち':'検品/ロット処理済み','最終入金完了':'入金確認済み'},
+  collection: {'検品待ち':'回収済み','ロット処理待ち':'検品完了','ロット処理済み':'ロット処理済み'},
+  shipment:   {'引去済':'在庫引去済み','出荷手配中':'出荷手配開始','出荷完了':'出荷済み'},
+  hanbai:     {'ディーラー発注済':'ディーラー発注済み','預かり中':'仕分け完了（入庫）','EC出品中':'EC出品済み'}
+};
 function advanceBtn(entity, id, st, flowOv){
   if(busy(entity, id)) return busyPill();
   const flow = flowOv||FLOW[entity], i = flow.indexOf(st);
   if(i<0 || i>=flow.length-1) return '';
   const next = flow[i+1];
   if(entity==='hanbai' && next==='お渡し済み'){
-    return '<button class="btn pri sm" onclick="handoverUI(\''+id+'\')">→ お渡し済みにする</button>';
+    return '<button class="btn pri sm" onclick="handoverUI(\''+id+'\')">✔ お渡し済みにする</button>';
   }
-  // 回収は行動が伝わるラベルにする（回収済み→検品必須→ロット処理する/しないを選ぶ）
-  const label = (entity==='collection' && next==='検品待ち') ? '✔ 回収済み（→ 検品待ち）'
-    : (entity==='collection' && next==='ロット処理待ち') ? '✔ 検品完了（→ ロット処理待ち）' : '→ '+next;
+  const actName = (ADV_ACTION[entity]||{})[next];
+  const label = actName ? '✔ '+actName+(actName===next?'':'（→ '+next+'）') : '→ '+next;
   return '<button class="btn pri sm" onclick="act(\'advanceStatus\',{entity:\''+entity+'\',id:\''+id+'\'},\''+id+' を「'+next+'」にしました\')">'+label+'</button>';
 }
 function rollbackBtn(entity, id, st, flowOv){
