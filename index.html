@@ -1498,13 +1498,14 @@ function newOrderForm(){
     '<label class="small">卸先<br><select id="noW" style="max-width:240px" onchange="viewState.noW=this.value;noApplyRates()"><option value="">選択してください</option>'+wOpts+'</select></label>' +
     '<label class="small">受注日<br><input type="date" id="noDate" value="'+(viewState.noDate||t)+'" onchange="viewState.noDate=this.value"></label>' +
     '<label class="small">支払方式<br><select id="noPay" onchange="viewState.noPay=this.value"><option '+(viewState.noPay==='半金×2'?'selected':'')+'>半金×2</option><option '+(viewState.noPay===''+NM.credit+'翌月末'?'selected':'')+'>'+NM.credit+'翌月末</option></select></label>' +
-    // 仕入れ形態は複数持てる（自社サロン＋外注×2など。＋で追加・✕で削除。2026-07-17 支払い設計）
-    '<label class="small">仕入れ形態<br><span style="display:inline-flex;gap:4px;align-items:center;flex-wrap:wrap">' +
-      (viewState.noForms||(viewState.noForms=['自社サロン'])).map((f,i)=>
-        '<select onchange="noFormSet('+i+',this.value)">'+['自社サロン','業者直卸','外注'].map(o=>'<option '+(f===o?'selected':'')+'>'+o+'</option>').join('')+'</select>' +
+    // 仕入れ形態は「自社サロン」＋外注先の実名（種別=ディーラーから自動）。抽象的な「外注/業者直卸」はやめた（同じ意味でややこしい、の2026-07-17 ユーザー指摘）
+    '<label class="small">仕入れ形態（複数あるときは＋で追加）<br><span style="display:inline-flex;gap:4px;align-items:center;flex-wrap:wrap">' +
+      (()=>{ const opts = ['自社サロン'].concat(rows('salons').filter(s=>String(s['種別']||'').trim()==='ディーラー'&&String(s['ストップ']||'').trim()===''&&String(s['サロンID']||'').trim()).map(salonLabel));
+      return (viewState.noForms||(viewState.noForms=['自社サロン'])).map((f,i)=>
+        '<select onchange="noFormSet('+i+',this.value)">'+opts.map(o=>'<option '+(f===o?'selected':'')+'>'+esc(o)+'</option>').join('')+'</select>' +
         (i>0?'<button class="btn sm" onclick="noFormDel('+i+')" title="この仕入れ形態を外す">✕</button>':'')
-      ).join('') +
-      '<button class="btn sm" onclick="noFormAdd()" title="仕入れ形態を追加（例: 自社サロン＋外注）">＋</button></span></label>' +
+      ).join(''); })() +
+      '<button class="btn sm" onclick="noFormAdd()" title="仕入れ形態を追加（例: 自社サロン＋外注先）">＋</button></span></label>' +
     '<label class="small">経路<br><label style="display:inline-flex;align-items:center;gap:6px;padding:8px 0"><input type="checkbox" id="noVia" '+(viewState.noVia?'checked':'')+' onchange="viewState.noVia=this.checked" style="width:16px;height:16px">🔁 '+NM.via+'経由（卸値3%が'+NM.via+'利益。'+NM.via+'帳票が発行できます）</label></label>' +
     '</div>' +
     '<div class="row" style="margin-top:10px;align-items:flex-end">' +
@@ -1571,7 +1572,11 @@ function noRecalcRow(i){
 }
 function noQtyInput(i, v){ viewState.noRows[i].qty = v; noRecalcRow(i); }
 function noFormSet(i, v){ (viewState.noForms=viewState.noForms||['自社サロン'])[i]=v; }
-function noFormAdd(){ (viewState.noForms=viewState.noForms||['自社サロン']).push('外注'); render(); }
+function noFormAdd(){
+  // 追加分の初期値は最初のディーラー（外注先を選ぶ操作が1回で済むように）
+  const d = rows('salons').find(s=>String(s['種別']||'').trim()==='ディーラー'&&String(s['ストップ']||'').trim()===''&&String(s['サロンID']||'').trim());
+  (viewState.noForms=viewState.noForms||['自社サロン']).push(d?salonLabel(d):'自社サロン'); render();
+}
 function noFormDel(i){ (viewState.noForms||[]).splice(i,1); render(); }
 // 掛け率は％で入力（65 → 0.65）。移行期の小数入力（0.65）もそのまま受ける（1以下は小数とみなす）
 function noRateInput(i, v){ const n=num(v); viewState.noRows[i].rate = v==='' ? '' : (n>1 ? String(n/100) : String(n)); noRecalcRow(i); }
