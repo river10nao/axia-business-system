@@ -2893,8 +2893,8 @@ function allocPrint(){
     const totalYen = lines.reduce((a,x)=>a+x.qty*x.i.price,0);
     const supSid = allocSupOf(r, sid);   // サロン別に仕入先を分けている場合は各セクションに明記
     return '<div class="salon"><h2>'+esc(names[sid]||sid)+' <span class="sub">計 '+totalQty+'点 ／ ¥'+Math.round(totalYen).toLocaleString()+'（サロン価格・税抜）'+(r.supSplit&&supSid?' ／ 仕入先: '+esc(names[supSid]||supSid):'')+'</span></h2>' +
-      '<table><tr><th>商品</th><th class="num">個数</th><th class="num">金額</th><th class="chk">回収✓</th><th class="chk">検品✓</th></tr>' +
-      lines.map(x=>'<tr><td>'+esc(x.i.name)+' '+esc(x.i.size||'')+(x.i.unit>1?'（'+x.i.unit+'個/箱）':'')+'</td><td class="num">'+x.qty+'</td><td class="num">¥'+Math.round(x.qty*x.i.price).toLocaleString()+'</td><td class="chk">□</td><td class="chk">□</td></tr>').join('') +
+      '<table><tr><th>商品</th><th class="num">個数</th><th class="num">金額</th><th class="chk">回収✓</th><th class="chk">検品✓</th><th class="chk">ロット✓</th></tr>' +
+      lines.map(x=>'<tr><td>'+esc(x.i.name)+' '+esc(x.i.size||'')+(x.i.unit>1?'（'+x.i.unit+'個/箱）':'')+'</td><td class="num">'+x.qty+'</td><td class="num">¥'+Math.round(x.qty*x.i.price).toLocaleString()+'</td><td class="chk">□</td><td class="chk">□</td><td class="chk">□</td></tr>').join('') +
       '</table></div>';
   }).join('');
   // 🤝外注仕入枠の分は外注先ごとに独立セクションで出す（外注先への共有・検品チェックにも使える。複数外注先対応 2026-07-18）
@@ -2905,8 +2905,8 @@ function allocPrint(){
     const oname = o.sid ? (names[o.sid]||o.sid) : '（外注先未選択）';
     const omoney = ls.reduce((a,x)=>a+x.qty*allocOutUnit(o.sid,x.i.pid),0);
     return '<div class="salon"><h2>🤝 外注仕入: '+esc(oname)+' <span class="sub">計 '+ls.reduce((a,x)=>a+x.qty,0)+'点 ／ ¥'+Math.round(omoney).toLocaleString()+'（外注先掛け率・税抜）</span></h2>' +
-    '<table><tr><th>商品</th><th class="num">個数</th><th class="chk">回収✓</th><th class="chk">検品✓</th></tr>' +
-    ls.map(x=>'<tr><td>'+esc(x.i.name)+' '+esc(x.i.size||'')+'</td><td class="num">'+x.qty+'</td><td class="chk">□</td><td class="chk">□</td></tr>').join('') +
+    '<table><tr><th>商品</th><th class="num">個数</th><th class="chk">回収✓</th><th class="chk">検品✓</th><th class="chk">ロット✓</th></tr>' +
+    ls.map(x=>'<tr><td>'+esc(x.i.name)+' '+esc(x.i.size||'')+'</td><td class="num">'+x.qty+'</td><td class="chk">□</td><td class="chk">□</td><td class="chk">□</td></tr>').join('') +
     '</table></div>'; }).join('');
   const outQtyOf = pid=>routs.reduce((a,o)=>a+num((o.q||{})[pid]),0);
   const leftovers = r.items.map(i=>({i, left:i.need - r.salonIds.reduce((a,s)=>a+num((r.m[s]||{})[i.pid]),0) - outQtyOf(i.pid)})).filter(x=>x.left>0);
