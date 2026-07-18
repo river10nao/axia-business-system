@@ -2603,13 +2603,14 @@ function vAllocation(){
     .filter(s=>!stopIds.has(String(s['サロンID']).trim()))
     .filter(s=>!q || (salonLabel(s)+s['サロンID']).includes(q));
   html += '<div class="card"><b class="small">② '+esc(brand)+' の割り振り条件（毎回入力）</b>' +
-    // 入数（箱）列は箱単位ブランド（'+NM.boxBrand+'）だけに表示。他ブランドは1個ずつ配分（2026-07-14 指定）
+    // 商品一覧は開閉式に格納（情報が多く見づらいとのユーザー指摘 2026-07-18）。入数調整が要る箱単位ブランドだけ最初から開く
     (()=>{ const showUnit = brand.includes(''+NM.boxBrand+'') || items.some(i=>i.unit>1);
-    return '<div class="tblwrap" style="margin-top:8px"><table><tr><th>商品</th><th>容量</th><th class="num">必要数</th><th class="num">サロン価格</th>'+(showUnit?'<th class="num">入数（箱）※毎回調整OK</th>':'')+'</tr>' +
+    return '<details style="margin-top:8px"'+(showUnit?' open':'')+'><summary class="small" style="cursor:pointer">📦 商品と必要数（'+items.length+'商品・計 '+needTotal+'点）'+(showUnit?' — 入数（箱）はここで毎回調整':'')+'</summary>' +
+    '<div class="tblwrap" style="margin-top:6px"><table><tr><th>商品</th><th>容量</th><th class="num">必要数</th><th class="num">サロン価格</th>'+(showUnit?'<th class="num">入数（箱）</th>':'')+'</tr>' +
     items.map(i=>'<tr><td class="small">'+esc(i.name)+'</td><td class="small">'+esc(i.size)+'</td><td class="num">'+i.need+'</td><td class="num">'+yen(i.price)+'</td>' +
       (showUnit?'<td class="num"><input type="number" value="'+(i.unit>1?i.unit:'')+'" min="1" placeholder="1（バラ）" onchange="allocUnit(\''+i.pid+'\',this.value)" style="width:84px;text-align:right"></td>':'')+'</tr>').join('') +
     '</table></div>' +
-    (showUnit?'<p class="muted small" style="margin:6px 0 0">入数（箱）は商品マスタの値が自動で入ります（レフィル=3 など）。今回だけ変えたいときはここで書き換え、バラに戻すなら 1 を入れてください。</p>':''); })() +
+    (showUnit?'<p class="muted small" style="margin:6px 0 0">マスタの値が自動で入ります。今回だけ変えるならここで書き換え（バラに戻す=1）。</p>':'')+'</details>'; })() +
     // 🤝外注仕入枠（計算前の設定・自社サロンのみモードでは出さない）: 受注の仕入れ形態の外注先が自動で行に入る。
     // 金額枠あり=🧮計算でその外注先へ先取り（支払額ベース・上の行から順）／枠が空欄=自社サロンに配ったあとの余りを全部吸収
     (()=>{ if(allocMode==='own') return '';
@@ -2617,19 +2618,19 @@ function vAllocation(){
         conf.outs = ids.map(sid=>({sid, budget:''})); if(!conf.outs.length) conf.outs.push({sid:'', budget:''}); }
       const dealers = outSalons.filter(s=>String(s['ストップ']||'').trim()==='');
       return '<div style="margin-top:10px;padding:8px 10px;border:1px dashed var(--axis);border-radius:10px">' +
-        '<div class="row"><b class="small">🤝 外注仕入枠（受注の仕入れ形態から自動・複数OK）</b>' +
+        '<div class="row"><b class="small">🤝 外注仕入枠</b>' +
         '<button class="btn sm" onclick="allocCOutAdd()">＋外注先を追加</button>' +
-        '<span class="muted small">🧮計算で、金額枠を入れた外注先に先にその金額分（その外注先への支払額ベース）→ 残りを自社サロンへ → 枠が空欄の外注先に余り全部、の順で入ります</span></div>' +
+        '<span class="muted small">枠あり=先にその金額分 → 残りは自社サロン → 枠空欄=余り全部</span></div>' +
         conf.outs.map((o,gi)=>'<div class="row" style="margin-top:6px;align-items:center">' +
           '<select onchange="allocCOutSet('+gi+',\'sid\',this.value)"><option value="">外注先を選ぶ</option>' +
           dealers.map(s=>{ const sid=String(s['サロンID']).trim(); return '<option value="'+sid+'" '+(o.sid===sid?'selected':'')+'>'+esc(salonLabel(s))+'</option>'; }).join('') + '</select>' +
           '<label class="small">金額枠（円）<br><input type="number" value="'+esc(o.budget||'')+'" onchange="allocCOutSet('+gi+',\'budget\',this.value)" placeholder="例: 300000（空欄=余り全部）" style="width:180px"></label>' +
-          '<label class="small">同一商品の上限（箱/個数の単位。空欄=無制限）<br><input type="number" value="'+esc(o.cap||'')+'" onchange="allocCOutSet('+gi+',\'cap\',this.value)" placeholder="例: 10" style="width:150px"></label>' +
+          '<label class="small">同一商品の上限（箱/個数）<br><input type="number" value="'+esc(o.cap||'')+'" onchange="allocCOutSet('+gi+',\'cap\',this.value)" placeholder="空欄=無制限" style="width:120px"></label>' +
           '<button class="btn sm" onclick="allocCOutDel('+gi+')">🗑</button></div>').join('') +
         '</div>'; })() +
     '<div class="row" style="margin-top:10px">' +
     '<label class="small">1サロンの枠金額（円）<br><input type="number" value="'+esc(conf.budget||'')+'" onchange="allocConf(\'budget\',this.value)" placeholder="例: 200000"></label>' +
-    '<label class="small">1サロン同一商品の上限（箱/個数の単位。空欄=無制限）<br><input type="number" value="'+esc(conf.cap||'')+'" onchange="allocConf(\'cap\',this.value)" placeholder="'+NM.boxBrand+'は 1"></label>' +
+    '<label class="small">1サロン同一商品の上限（箱/個数）<br><input type="number" value="'+esc(conf.cap||'')+'" onchange="allocConf(\'cap\',this.value)" placeholder="'+NM.boxBrand+'は 1・空欄=無制限"></label>' +
     '</div>' +
     '<div style="margin-top:10px"><b class="small">割り振り先サロン（'+salonSel.length+'軒選択中・毎回選ぶ）</b> ' +
     '<input class="search" placeholder="サロン名で絞る" value="'+esc(q)+'"'+searchAttrs('alloc')+'  style="max-width:220px">' +
@@ -2663,7 +2664,7 @@ function vAllocation(){
       (allocMode!=='own' && outs.length ? '<div style="margin-top:8px;padding:8px 10px;border:1px dashed var(--axis);border-radius:10px">' +
       '<div class="row"><b class="small">🤝 外注仕入枠の結果</b>' +
       '<span class="small">余り <b>'+shortTotal+'点</b>'+(outTotal>0?' ／ 外注計 <b>'+outTotal+'点</b>':'')+'</span>' +
-      '<span class="muted small">外注先や金額枠を変えるときは②で直して🧮を押し直してください。表の外注列は1個単位で手直しできます。確定すると外注先ごとに別の回収番号で回収・検品に載ります</span></div>' +
+      '<span class="muted small">枠の変更は②で直して🧮押し直し。表の外注列は直接手直しOK</span></div>' +
       outs.map((o,gi)=>{
         const cnt = r.items.reduce((a,i)=>a+num((o.q||{})[i.pid]),0);
         const money = r.items.reduce((a,i)=>a+num((o.q||{})[i.pid])*allocOutUnit(o.sid,i.pid),0);
@@ -2680,7 +2681,7 @@ function vAllocation(){
         const cands = dl.filter(s=>Object.keys(s).some(k=>{ const m=String(k).match(/^([^（(]+)[（(][^）)]*[%％][）)]\s*$/); return m && m[1].trim() && brand.indexOf(m[1].trim())===0 && String(s[k]).trim()!==''; }));
         if(!r.supplier && cands.length===1) r.supplier = String(cands[0]['サロンID']).trim();
         return '<div class="row" style="margin-top:8px;padding:8px 10px;border:1px dashed var(--axis);border-radius:10px;align-items:center">' +
-          '<b class="small">🏭 仕入先（どのディーラーから仕入れるか・支払い集計に使います）</b>' +
+          '<b class="small">🏭 仕入先（どのディーラーから仕入れるか）</b>' +
           '<select onchange="allocSupplier(this.value)"><option value="">選んでください</option>' +
           dl.map(s=>{ const sid=String(s['サロンID']).trim(); return '<option value="'+sid+'" '+(r.supplier===sid?'selected':'')+'>'+esc(salonLabel(s))+'</option>'; }).join('') + '</select>' +
           (cands.length>1 ? '<span class="small" style="color:var(--s4)">⚠ '+esc(brand)+' は複数のディーラーから仕入れ可（'+cands.map(s=>esc(salonLabel(s))).join(' / ')+'）。今回どこから仕入れるか選んでください</span>'
