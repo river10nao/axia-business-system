@@ -2350,6 +2350,9 @@ function vQuota(){
     if(!bySalon[l.sid]) bySalon[l.sid] = {sid:l.sid, name:l.name, brands:[]};
     bySalon[l.sid].brands.push(l);
   });
+  // 使っていないサロンも空バーで全件出す（2026-07-18 ユーザー要望）。ストップ中・ディーラー・外注は除外
+  rows('salons').filter(s=>String(s['サロンID']||'').trim() && ['サロン',''].includes(String(s['種別']||'').trim()) && String(s['ストップ']||'').trim()==='')
+    .forEach(s=>{ const sid=String(s['サロンID']).trim(); if(!bySalon[sid]) bySalon[sid]={sid, name:salonLabel(s), brands:[]}; });
   // ブランド→色の割当は全サロン共通・固定順（同じブランドはどのサロンでも同じ色）
   const allBrands = [...new Set(lines.map(l=>l.brand))].sort();
   const colorOf = b => 'var(--s'+((allBrands.indexOf(b)%6)+1)+')';
@@ -2402,9 +2405,9 @@ function vQuota(){
         esc(b.brand)+' '+yen(b.used)+' / '+yen(b.quota)+'（残 '+yen(b.quota-b.used)+'）</span>';
     }).join('<span style="color:var(--grid)">｜</span>');
     return '<div class="gauge" style="margin-bottom:16px"><div class="row small"><span><b>'+esc(s.name)+'</b></span>' +
-      '<span class="right mono">'+yen(s.totalUsed)+' / '+yen(s.totalQuota)+'（残 '+yen(s.totalQuota-s.totalUsed)+'）</span></div>' +
+      '<span class="right mono">'+(s.brands.length ? yen(s.totalUsed)+' / '+yen(s.totalQuota)+'（残 '+yen(s.totalQuota-s.totalUsed)+'）' : '<span class="muted">今月の仕入なし</span>')+'</span></div>' +
       '<div class="bar-outer" style="height:16px;display:flex;gap:2px">'+segs+'</div>' +
-      '<div class="steps" style="margin-top:4px">'+chips+'</div></div>';
+      (s.brands.length ? '<div class="steps" style="margin-top:4px">'+chips+'</div>' : '')+'</div>';
   }).join('') || '<p class="muted">この月の使用データがありません</p>') + '</div>' +
   '<p class="muted small">※ 使用額は 回収（発注日ベース）＋店販品注文 の サロン仕入価格（税抜）×個数。ブランド内訳が70%超で黄・90%超で赤。</p>';
 }
