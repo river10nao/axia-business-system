@@ -3014,6 +3014,12 @@ function allocPrint(){
     '<table><tr><th>商品</th><th class="num">個数</th><th class="num">金額</th><th class="chk">回収✓</th><th class="chk">検品✓</th><th class="chk">ロット✓</th></tr>' +
     ls.map(x=>'<tr><td>'+esc(x.i.name)+' '+esc(x.i.size||'')+'</td><td class="num">'+x.qty+'</td><td class="num">¥'+Math.round(x.qty*allocOutUnit(o.sid,x.i.pid)).toLocaleString()+'</td><td class="chk">□</td><td class="chk">□</td><td class="chk">□</td></tr>').join('') +
     '</table></div>'; }).join('');
+  // 📦余剰在庫からの充当分（回収・検品はスキップしてロット処理から始まるため、チェック欄はロットのみ 2026-07-18）
+  const stocks = r.stock || [];
+  const stockSection = stocks.length ? '<div class="salon"><h2>📦 余剰在庫から充当 <span class="sub">計 '+stocks.reduce((a,x)=>a+x.qty,0)+'点（仕入れなし・手元在庫から出荷）</span></h2>' +
+    '<table><tr><th>商品</th><th>引当元ロット</th><th class="num">個数</th><th class="chk">ロット✓</th></tr>' +
+    stocks.map(x=>'<tr><td>'+esc(x.name)+' '+esc(x.size||'')+'</td><td>'+esc(x.zid)+'</td><td class="num">'+x.qty+'</td><td class="chk">□</td></tr>').join('') +
+    '</table></div>' : '';
   const outQtyOf = pid=>routs.reduce((a,o)=>a+num((o.q||{})[pid]),0);
   const leftovers = r.items.map(i=>({i, left:i.need - r.salonIds.reduce((a,s)=>a+num((r.m[s]||{})[i.pid]),0) - outQtyOf(i.pid)})).filter(x=>x.left>0);
   const w = window.open('', '_blank');
@@ -3024,7 +3030,7 @@ function allocPrint(){
     '<button onclick="print()" style="padding:6px 14px">🖨 印刷 / PDF保存</button>' +
     '<h1>'+esc(brand)+' サロン振り分け表（'+today()+'）</h1>' +
     '<p>対象受注: '+selIds.join(', ')+' ／ 1サロン枠: ¥'+Math.round(r.budget).toLocaleString()+(r.cap?' ／ 同一商品上限: '+r.cap:'')+(r.supSplit?' ／ 仕入先: サロンごと（各欄に記載）':r.supplier?' ／ 仕入先: '+esc(names[r.supplier]||r.supplier):'')+'</p>' +
-    sections + outSection +
+    sections + outSection + stockSection +
     (leftovers.length ? '<div class="salon"><h2>配りきれなかった分（余り）</h2><table><tr><th>商品</th><th class="num">余り個数</th></tr>' +
       leftovers.map(x=>'<tr><td>'+esc(x.i.name)+' '+esc(x.i.size||'')+'</td><td class="num">'+x.left+'</td></tr>').join('') + '</table></div>' : '') +
     '</body></html>');
