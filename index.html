@@ -492,7 +492,8 @@ function navCounts(){
   };
 }
 function mtgPendCount(){ return mtgPrepayGroups().pend.length; }
-// MTG前払いの状況を回収ID単位でまとめる（pend=未完了・done=完了済み）。金額=サロン仕入価格×個数（前払い原資）
+// MTG前払いの状況を「案件」単位でまとめる（対象受注が同じ回収はまとめて1件。2026-07-18 ユーザー指定「1案件に1ボタン」）
+// 受注に紐づかない手動仕入れは回収IDごとに1件。金額=サロン仕入価格×個数（前払い原資）
 function mtgPrepayGroups(){
   const term = st=>st==='ロット処理済み'||st==='ロット処理なし';
   const by = {};
@@ -500,7 +501,10 @@ function mtgPrepayGroups(){
     const pid = String(r['商品ID']||'').trim();
     if(brandOf(pid)!=='MTG') return;
     const kid = String(r['回収ID']||'').trim(); if(!kid) return;
-    const g = by[kid]=by[kid]||{kid, salon:String(r['サロン名']||''), amt:0, n:0, marked:0, active:0, doneAt:''};
+    const oids = String(r['対象受注']||'').trim();
+    const key = oids || kid;   // 案件キー: 対象受注（同じ受注の回収はまとめる）。無ければ回収ID単体
+    const g = by[key]=by[key]||{key, oids, kids:new Set(), salons:new Set(), amt:0, n:0, marked:0, active:0, doneAt:''};
+    g.kids.add(kid); if(String(r['サロン名']||'').trim()) g.salons.add(String(r['サロン名']).trim());
     g.amt += salonCost(pid)*num(r['個数']); g.n++;
     const mk = String(r['MTG前払い済']||'').trim();
     if(mk){ g.marked++; g.doneAt = mk; }
@@ -509,20 +513,27 @@ function mtgPrepayGroups(){
   const all = Object.values(by);
   return { pend: all.filter(g=>g.marked<g.n && g.active>0), done: all.filter(g=>g.marked>=g.n) };
 }
-// ⚠MTG前払いカード（💰支払い・サロン精算の両画面共通）。✔で完了=アラート消し込み（回収台帳「MTG前払い済」列に記録）
+function mtgDone(kidsCsv, off, label){
+  if(!off && !confirm(label+' のMTG前払いを完了にしますか？')) return;
+  const kids = String(kidsCsv||'').split(',').filter(Boolean);
+  act('setMtgPrepaid', off?{kids, off:true}:{kids}, off?'完了を取り消しました':'MTG前払いを完了にしました', ['collectionLedger']);
+}
+// ⚠MTG前払いカード（💰支払い・サロン精算の両画面共通）。案件1件=ボタン1つで消し込み（回収台帳「MTG前払い済」列に記録）
 function mtgAlertCard(){
   const g = mtgPrepayGroups();
   if(!g.pend.length && !g.done.length) return '';
+  const nameOf = x=>x.oids ? '📋 '+x.oids : [...x.kids].join(', ');
   return '<div class="card"'+(g.pend.length?' style="border-color:var(--warn)"':'')+'>' +
     (g.pend.length
       ? '<b>⚠ MTG前払いが必要な案件（'+g.pend.length+'件）</b> <span class="small muted">サロン着の代引きに合わせて '+esc(NM.spay)+' がサロンへ事前振込 → その原資を先に '+esc(NM.spay)+' へ。支払いできたら ✔ で完了にするとアラートが消えます</span>' +
-        g.pend.map(x=>'<div class="row small" style="margin-top:6px;border-top:1px solid var(--axis);padding-top:6px"><span class="mono">'+esc(x.kid)+'</span><span>'+esc(x.salon)+'</span>' +
-          '<span class="right"><b>'+yen(x.amt)+'</b> <button class="btn sm" onclick="if(confirm(\''+esc(x.kid)+'（'+esc(x.salon)+'）のMTG前払いを完了にしますか？\'))act(\'setMtgPrepaid\',{kid:\''+esc(x.kid)+'\'},\'MTG前払いを完了にしました\',[\'collectionLedger\'])">✔ 前払い完了</button></span></div>').join('')
+        g.pend.map(x=>'<div class="row small" style="margin-top:6px;border-top:1px solid var(--axis);padding-top:6px"><span class="mono"><b>'+esc(nameOf(x))+'</b></span>' +
+          '<span class="muted">サロン '+x.salons.size+'軒（'+[...x.salons].join('・')+'）</span>' +
+          '<span class="right"><b>'+yen(x.amt)+'</b> <button class="btn sm" onclick="mtgDone(\''+esc([...x.kids].join(','))+'\', false, \''+esc(nameOf(x))+'\')">✔ 前払い完了</button></span></div>').join('')
       : '<b class="small">MTG前払い: 未完了はありません</b>') +
     (g.done.length
       ? '<details style="margin-top:6px"><summary class="small muted" style="cursor:pointer">✔ 完了済み '+g.done.length+'件</summary>' +
-        g.done.map(x=>'<div class="row small" style="margin-top:4px"><span class="mono">'+esc(x.kid)+'</span><span>'+esc(x.salon)+'</span><span class="muted">'+esc(x.doneAt)+'</span>' +
-          '<span class="right">'+yen(x.amt)+' <button class="btn sm" onclick="act(\'setMtgPrepaid\',{kid:\''+esc(x.kid)+'\',off:true},\'完了を取り消しました\',[\'collectionLedger\'])">↩ 戻す</button></span></div>').join('')+'</details>'
+        g.done.map(x=>'<div class="row small" style="margin-top:4px"><span class="mono">'+esc(nameOf(x))+'</span><span class="muted">サロン '+x.salons.size+'軒 ／ '+esc(x.doneAt)+'</span>' +
+          '<span class="right">'+yen(x.amt)+' <button class="btn sm" onclick="mtgDone(\''+esc([...x.kids].join(','))+'\', true)">↩ 戻す</button></span></div>').join('')+'</details>'
       : '') +
     '</div>';
 }
@@ -1438,8 +1449,8 @@ function vOrders(){
       '</table></div>' +
       // 発注日はステータスボタンの真上。未入力のまま回収中へ進めない（スルー事故防止。サーバー側にも同じガード。2026-07-17 ユーザー指定）
       (FLOW.order.indexOf(g.st)>=2 ? (()=>{ const ordEmpty = !String(g.ord||'').trim();
-        // 未入力の注意喚起は薄いオレンジ背景＋左の太線で（点線は使わない・2026-07-18 ユーザー指定）
-        return '<div class="row small" style="margin-top:10px;align-items:center;gap:8px'+(ordEmpty&&g.st==='振分/発注'?';padding:8px 10px;background:color-mix(in srgb,var(--warn) 10%,transparent);border-left:3px solid var(--warn);border-radius:8px':'')+'">📦 <b>発注日</b>: ' +
+        // 未入力の注意喚起は薄いオレンジ背景のみ（点線・左線は使わない・2026-07-18 ユーザー指定）
+        return '<div class="row small" style="margin-top:10px;align-items:center;gap:8px'+(ordEmpty&&g.st==='振分/発注'?';padding:8px 10px;background:color-mix(in srgb,var(--warn) 10%,transparent);border-radius:8px':'')+'">📦 <b>発注日</b>: ' +
         '<input type="date" id="ord'+g.id+'" value="'+esc(String(g.ord||'').trim().replace(/\//g,'-'))+'" style="padding:4px 8px">' +
         '<button class="btn sm" onclick="saveOrderDate(\''+g.id+'\')">保存</button>' +
         (ordEmpty ? '<span class="small" style="color:var(--ink2)"><b>※入力しないと「回収中」へ進めません。</b>実際にディーラーへ発注した日＝どの月の支払いに乗るかの基準です（ズレるとディーラー請求書と合いません）</span>'
@@ -2392,27 +2403,36 @@ function allocUnit(pid, v){
   if(ALLOC.result[ALLOC.brand]){ delete ALLOC.result[ALLOC.brand]; toast('入数を変更しました。「🧮 割り振りを計算」を押し直してください'); }
   render();
 }
-// 均等割り振り: 商品ごとに、選んだサロンへ1単位（箱 or 1個）ずつ順繰りに配る。
-// 全サロンに行き渡ってから2周目に入るので、サロン間の差は最大1単位。枠金額と上限は守る（守れない分は余り）
-function allocRun(items, salonIds, budget, cap){
+// 均等割り振り: 選んだサロンへ1単位（箱 or 1個）ずつ順繰りに配る。枠金額と上限は守る（守れない分は余り）
+// spread=true（既定）: 商品もばらけさせる＝全商品を1単位ずつ交互に配る（枠が先に埋まっても商品が偏らない。2026-07-18 ユーザー要望）
+// spread=false: 従来方式＝商品順に配りきってから次の商品へ（先頭の商品がサロンに固まりやすい）
+function allocRun(items, salonIds, budget, cap, spread){
   const rem={}, have={}, spent={};
   items.forEach(i=>rem[i.pid]=i.need);
   salonIds.forEach(s=>{ have[s]={}; spent[s]=0; });
-  items.forEach((i, idx)=>{
-    let placed = true;
-    while(placed && rem[i.pid]>=i.unit){
-      placed = false;
-      for(let k=0; k<salonIds.length; k++){
-        const s = salonIds[(k+idx) % salonIds.length];   // 開始サロンを商品ごとにずらす（余りの+1が同じサロンに偏らない）
-        if(rem[i.pid]<i.unit) break;
-        if(cap && (have[s][i.pid]||0) >= cap) continue;
-        if(spent[s] + i.price*i.unit > budget) continue;
-        have[s][i.pid]=(have[s][i.pid]||0)+1;
-        rem[i.pid]-=i.unit; spent[s]+=i.price*i.unit;
-        placed = true;
-      }
+  const placeOne = (i, cur)=>{   // 商品iを1単位、cur[i.pid]の位置からround-robinでどこかのサロンへ。置けたらtrue
+    for(let k=0; k<salonIds.length; k++){
+      const s = salonIds[(cur[i.pid]+k) % salonIds.length];
+      if(cap && (have[s][i.pid]||0) >= cap) continue;
+      if(spent[s] + i.price*i.unit > budget) continue;
+      have[s][i.pid]=(have[s][i.pid]||0)+1;
+      rem[i.pid]-=i.unit; spent[s]+=i.price*i.unit;
+      cur[i.pid] = (cur[i.pid]+k+1) % salonIds.length;
+      return true;
     }
-  });
+    return false;
+  };
+  const cur = {};
+  items.forEach((i,idx)=>cur[i.pid]=salonIds.length?idx%salonIds.length:0);   // 開始サロンを商品ごとにずらす（余りの+1が偏らない）
+  if(spread){
+    let prog = true;
+    while(prog){
+      prog = false;
+      items.forEach(i=>{ if(rem[i.pid]>=i.unit && placeOne(i, cur)) prog = true; });
+    }
+  } else {
+    items.forEach(i=>{ while(rem[i.pid]>=i.unit && placeOne(i, cur)); });
+  }
   const m = {};
   salonIds.forEach(s=>{ m[s]={}; items.forEach(i=>{ const u=(have[s][i.pid]||0)*i.unit; if(u>0) m[s][i.pid]=u; }); });
   return m;
@@ -2434,20 +2454,29 @@ function allocCalc(){
   // 計算順: ①金額枠ありの外注先へ先取り（上の行から・枠は外注先への支払額ベース） → ②自社サロンへ均等配分 → ③枠が空欄の外注先が余りを全部吸収
   const coutsRaw = ALLOC.mode!=='own' ? (conf.outs||[]) : [];
   if(coutsRaw.some(o=>num(o.budget)>0 && !o.sid)){ toast('外注仕入枠に金額だけ入って外注先が選ばれていない行があります', true); return; }
+  const spread = conf.spread!==false;   // 商品をばらけさせる（既定ON。OFF=従来の商品順詰め。2026-07-18 ユーザー要望）
   const routs = coutsRaw.filter(o=>o.sid).map(o=>({sid:o.sid, budget:o.budget, cap:o.cap, q:{}}));
   const rem = {}; items.forEach(i=>rem[i.pid]=i.need);
   routs.filter(o=>num(o.budget)>0).forEach(o=>{
     const b = num(o.budget); let spent = 0;
     const ocap = num(o.cap)||0;   // 同一商品の上限（箱/個数の単位。商品の偏り防止・2026-07-18 ユーザー要望）
-    items.forEach(i=>{
+    const takeOne = i=>{   // 商品iを1単位この外注先へ（枠・上限が許す場合）。取れたらtrue
       const unit = i.unit>1 ? i.unit : 1;
       const u = allocOutUnit(o.sid, i.pid);
-      let take = 0;
-      while(rem[i.pid]-take >= unit && spent + u*unit <= b && (!ocap || take/unit < ocap)){ take += unit; spent += u*unit; }
-      if(take>0){ o.q[i.pid]=take; rem[i.pid]-=take; }
-    });
+      if(rem[i.pid] < unit || spent + u*unit > b) return false;
+      if(ocap && num(o.q[i.pid])/unit >= ocap) return false;
+      o.q[i.pid] = num(o.q[i.pid]) + unit; rem[i.pid] -= unit; spent += u*unit;
+      return true;
+    };
+    if(spread){   // ばらけ: 全商品を1単位ずつ交互に取る（枠が先に埋まっても商品が偏らない）
+      let prog = true;
+      while(prog){ prog = false; items.forEach(i=>{ if(takeOne(i)) prog = true; }); }
+    } else {
+      items.forEach(i=>{ while(takeOne(i)); });
+    }
+    Object.keys(o.q).forEach(pid=>{ if(!o.q[pid]) delete o.q[pid]; });
   });
-  const m = allocRun(items.map(i=>({...i, need:rem[i.pid]})), salonIds, budget, cap);
+  const m = allocRun(items.map(i=>({...i, need:rem[i.pid]})), salonIds, budget, cap, spread);
   salonIds.forEach(s=>items.forEach(i=>{ rem[i.pid] -= num((m[s]||{})[i.pid]); }));
   // 枠が空欄の外注先=余りの受け皿（上の行から順・同一商品上限は守る。上限で受けきれない分は余りとして残る=確定ブロック対象）
   routs.filter(o=>!num(o.budget)).forEach(o=>{
@@ -2503,18 +2532,22 @@ function allocOutFill(idx){
   if(!o.sid){ toast('先に外注先を選んでください（金額枠の単価＝その外注先の掛け率で計算するため）', true); return; }
   const b = num(o.budget) || Infinity;
   const ocap = num(o.cap)||0;   // 同一商品の上限（箱/個数の単位）
+  const spread = (ALLOC.conf[ALLOC.brand]||{}).spread!==false;   // ②の「商品をばらけさせる」設定に従う
   let spent = r.items.reduce((a,i)=>a+num(o.q[i.pid])*allocOutUnit(o.sid,i.pid),0);   // 既に入っている分も枠に含める
   let moved = 0;
-  r.items.forEach(i=>{
+  const takeOne = i=>{
     const unit = i.unit>1 ? i.unit : 1;
     const u = allocOutUnit(o.sid, i.pid);
     const asg = r.salonIds.reduce((a,s)=>a+num((r.m[s]||{})[i.pid]),0);
     const others = outs.reduce((a,oo)=>a+num(oo.q[i.pid]),0);
-    const left = i.need - asg - others;
-    let take = 0;
-    while(left-take >= unit && spent + u*unit <= b && (!ocap || (num(o.q[i.pid])+take)/unit < ocap)){ take += unit; spent += u*unit; }
-    if(take>0){ o.q[i.pid] = num(o.q[i.pid]) + take; moved += take; }
-  });
+    if(i.need - asg - others < unit) return false;
+    if(spent + u*unit > b) return false;
+    if(ocap && num(o.q[i.pid])/unit >= ocap) return false;
+    o.q[i.pid] = num(o.q[i.pid]) + unit; spent += u*unit; moved += unit;
+    return true;
+  };
+  if(spread){ let prog = true; while(prog){ prog = false; r.items.forEach(i=>{ if(takeOne(i)) prog = true; }); } }
+  else r.items.forEach(i=>{ while(takeOne(i)); });
   if(!moved){ toast(num(o.budget) ? '金額枠いっぱいか、余りがありません' : '余りはありません（全て割り振り済みです）'); return; }
   toast(moved+'点 を外注枠に入れました（この外注先 計 '+yen(spent)+'）');
   render();
@@ -2682,9 +2715,11 @@ function vAllocation(){
         '</table>' +
         '<div style="margin-top:6px"><button class="btn sm" onclick="allocCOutAdd()">＋外注先を追加</button></div>' +
         '</div>'; })() +
-    '<div class="row" style="margin-top:10px">' +
+    '<div class="row" style="margin-top:10px;align-items:flex-end">' +
     '<label class="small">1サロンの枠金額（円）<br><input type="number" value="'+esc(conf.budget||'')+'" onchange="allocConf(\'budget\',this.value)" placeholder="例: 200000"></label>' +
     '<label class="small">1サロン同一商品の上限（箱/個数）<br><input type="number" value="'+esc(conf.cap||'')+'" onchange="allocConf(\'cap\',this.value)" placeholder="'+NM.boxBrand+'は 1・空欄=無制限"></label>' +
+    // 商品をばらけさせる: 全商品を1単位ずつ混ぜて配る（サロン・外注とも商品が偏らない。2026-07-18 ユーザー要望）
+    '<label class="small" style="padding-bottom:6px"><input type="checkbox" '+(conf.spread!==false?'checked':'')+' onclick="allocConf(\'spread\',this.checked)" style="width:15px;height:15px;vertical-align:-2px"> <b>商品をばらけさせる</b> <span class="muted">OFF=商品順に詰める（前の商品から固まる）</span></label>' +
     '</div>' +
     '<div style="margin-top:10px"><b class="small">割り振り先サロン（'+salonSel.length+'軒選択中・毎回選ぶ）</b> ' +
     '<input class="search" placeholder="サロン名で絞る" value="'+esc(q)+'"'+searchAttrs('alloc')+'  style="max-width:220px">' +
