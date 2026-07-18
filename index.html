@@ -486,15 +486,18 @@ function navCounts(){
     // 振り分けは下書き数ではなく「振分が終わっていない案件」数（2026-07-18 ユーザー指定）
     allocation: (()=>{ const cov = allocCoverage();
       return allocOrderGroups().filter(g=>!(g.brands.size>0 && [...g.brands].every(b=>{ const e=(cov[g.id]||{})[b]; return e&&e.done; }))).length; })(),
-    // MTG前払いアラート: 未完了（✔前払い完了が押されていない）×回収がまだ入庫まで進んでいないMTG回収の数。
-    // 支払い画面とサロン精算画面の両方に出す（2026-07-18 ユーザー要望）
-    payments: mtgPendCount(), salonpay: mtgPendCount()
+    // MTG前払いアラート: 未完了×回収がまだ入庫まで進んでいないMTG案件の数。
+    // 支払い画面とサロン精算画面で別フラグ（連動しない・2026-07-18 ユーザー指定）
+    payments: mtgPendCount('co'), salonpay: mtgPendCount('spay')
   };
 }
-function mtgPendCount(){ return mtgPrepayGroups().pend.length; }
+function mtgPendCount(side){ return mtgPrepayGroups(side).pend.length; }
 // MTG前払いの状況を「案件」単位でまとめる（対象受注が同じ回収はまとめて1件。2026-07-18 ユーザー指定「1案件に1ボタン」）
 // 受注に紐づかない手動仕入れは回収IDごとに1件。金額=サロン仕入価格×個数（前払い原資）
-function mtgPrepayGroups(){
+// side='co'（会社支払い画面）と side='spay'（サロン精算画面）は別フラグで連動しない（2026-07-18 ユーザー指定）:
+//   co=「MTG前払い済」列（会社→精算代行への原資支払い） / spay=「MTG振込済」列（精算代行→サロンへの事前振込）
+function mtgPrepayGroups(side){
+  const colName = side==='spay' ? 'MTG振込済' : 'MTG前払い済';
   const term = st=>st==='ロット処理済み'||st==='ロット処理なし';
   const by = {};
   rows('collectionLedger').forEach(r=>{
@@ -506,34 +509,40 @@ function mtgPrepayGroups(){
     const g = by[key]=by[key]||{key, oids, kids:new Set(), salons:new Set(), amt:0, n:0, marked:0, active:0, doneAt:''};
     g.kids.add(kid); if(String(r['サロン名']||'').trim()) g.salons.add(String(r['サロン名']).trim());
     g.amt += salonCost(pid)*num(r['個数']); g.n++;
-    const mk = String(r['MTG前払い済']||'').trim();
+    const mk = String(r[colName]||'').trim();
     if(mk){ g.marked++; g.doneAt = mk; }
     if(!term(String(r['ステータス']||'').trim())) g.active++;
   });
   const all = Object.values(by);
   return { pend: all.filter(g=>g.marked<g.n && g.active>0), done: all.filter(g=>g.marked>=g.n) };
 }
-function mtgDone(kidsCsv, off, label){
-  if(!off && !confirm(label+' のMTG前払いを完了にしますか？')) return;
+function mtgDone(kidsCsv, off, label, side){
+  const what = side==='spay' ? 'サロンへの事前振込' : 'MTG前払い';
+  if(!off && !confirm(label+' の'+what+'を完了にしますか？')) return;
   const kids = String(kidsCsv||'').split(',').filter(Boolean);
-  act('setMtgPrepaid', off?{kids, off:true}:{kids}, off?'完了を取り消しました':'MTG前払いを完了にしました', ['collectionLedger']);
+  act('setMtgPrepaid', {kids, side: side==='spay'?'spay':'co', ...(off?{off:true}:{})},
+    off?'完了を取り消しました':what+'を完了にしました', ['collectionLedger']);
 }
-// ⚠MTG前払いカード（💰支払い・サロン精算の両画面共通）。案件1件=ボタン1つで消し込み（回収台帳「MTG前払い済」列に記録）
-function mtgAlertCard(){
-  const g = mtgPrepayGroups();
+// ⚠MTG前払いカード。side='co'（💰支払い画面）/'spay'（サロン精算画面）で別フラグ・別ボタン（連動しない）
+function mtgAlertCard(side){
+  const g = mtgPrepayGroups(side);
   if(!g.pend.length && !g.done.length) return '';
   const nameOf = x=>x.oids ? '📋 '+x.oids : [...x.kids].join(', ');
+  const desc = side==='spay'
+    ? 'サロン着の代引きに合わせて '+esc(NM.spay)+' がサロンへ事前振込。振込がすんだら ✔ で完了に（この画面専用のチェックです）'
+    : esc(NM.spay)+' がサロンへ事前振込する原資を、先に '+esc(NM.spay)+' へ支払います。支払ったら ✔ で完了に（この画面専用のチェックです）';
+  const btnLabel = side==='spay' ? '✔ 振込完了' : '✔ 前払い完了';
   return '<div class="card"'+(g.pend.length?' style="border-color:var(--warn)"':'')+'>' +
     (g.pend.length
-      ? '<b>⚠ MTG前払いが必要な案件（'+g.pend.length+'件）</b> <span class="small muted">サロン着の代引きに合わせて '+esc(NM.spay)+' がサロンへ事前振込 → その原資を先に '+esc(NM.spay)+' へ。支払いできたら ✔ で完了にするとアラートが消えます</span>' +
+      ? '<b>⚠ MTG'+(side==='spay'?'サロン振込':'前払い')+'が必要な案件（'+g.pend.length+'件）</b> <span class="small muted">'+desc+'</span>' +
         g.pend.map(x=>'<div class="row small" style="margin-top:6px;border-top:1px solid var(--axis);padding-top:6px"><span class="mono"><b>'+esc(nameOf(x))+'</b></span>' +
           '<span class="muted">サロン '+x.salons.size+'軒（'+[...x.salons].join('・')+'）</span>' +
-          '<span class="right"><b>'+yen(x.amt)+'</b> <button class="btn sm" onclick="mtgDone(\''+esc([...x.kids].join(','))+'\', false, \''+esc(nameOf(x))+'\')">✔ 前払い完了</button></span></div>').join('')
-      : '<b class="small">MTG前払い: 未完了はありません</b>') +
+          '<span class="right"><b>'+yen(x.amt)+'</b> <button class="btn sm" onclick="mtgDone(\''+esc([...x.kids].join(','))+'\', false, \''+esc(nameOf(x))+'\', \''+(side==='spay'?'spay':'co')+'\')">'+btnLabel+'</button></span></div>').join('')
+      : '<b class="small">MTG'+(side==='spay'?'サロン振込':'前払い')+': 未完了はありません</b>') +
     (g.done.length
       ? '<details style="margin-top:6px"><summary class="small muted" style="cursor:pointer">✔ 完了済み '+g.done.length+'件</summary>' +
         g.done.map(x=>'<div class="row small" style="margin-top:4px"><span class="mono">'+esc(nameOf(x))+'</span><span class="muted">サロン '+x.salons.size+'軒 ／ '+esc(x.doneAt)+'</span>' +
-          '<span class="right">'+yen(x.amt)+' <button class="btn sm" onclick="mtgDone(\''+esc([...x.kids].join(','))+'\', true)">↩ 戻す</button></span></div>').join('')+'</details>'
+          '<span class="right">'+yen(x.amt)+' <button class="btn sm" onclick="mtgDone(\''+esc([...x.kids].join(','))+'\', true, \'\', \''+(side==='spay'?'spay':'co')+'\')">↩ 戻す</button></span></div>').join('')+'</details>'
       : '') +
     '</div>';
 }
@@ -653,8 +662,8 @@ function vPayments(){
   let html = '<h1>'+esc(NM.co)+'支払い</h1><div class="sub">仕入先・支払先ごとの支払予定。計上日は受注カードの📦発注日（未入力の分は振分確定日で「仮」計上）。行を開くと根拠明細が見られます</div>' +
     '<div class="row" style="margin-bottom:12px">対象月（計上日）: '+monthSel+'</div>';
 
-  // ---- MTG前払いアラート（✔完了ボタンつき・サロン精算画面と共通。対象月フィルタに関わらず未完了は常に出す） ----
-  html += mtgAlertCard();
+  // ---- MTG前払いアラート（✔完了ボタンつき。サロン精算画面とは別フラグで連動しない。対象月フィルタに関わらず未完了は常に出す） ----
+  html += mtgAlertCard('co');
 
   // ---- 支払先カード（仕入先=ディーラー/外注） ----
   const supIds = Object.keys(bySup).filter(k=>k!=='');
@@ -2292,7 +2301,7 @@ function vSalonPay(){
   const due = new Date(y, m+1, 0);
   const dueStr = due.getFullYear()+'年'+(due.getMonth()+1)+'月'+due.getDate()+'日';
   return '<h1>'+NM.spay+'支払</h1><div class="sub">サロンへの支払いは'+NM.spay+'経由。協力費（'+yen(BRAND_FEE)+'/ブランド/サロン）は<b>対象月の翌月末払い</b>。MTG代金は<b>都度払い</b>で月次には含めません</div>' +
-  mtgAlertCard() +   // MTG前払いアラート（✔完了ボタンつき・💰支払い画面と共通。2026-07-18 両画面に表示のユーザー要望）
+  mtgAlertCard('spay') +   // MTGサロン振込アラート（✔振込完了ボタン。💰支払い画面とは別フラグで連動しない。2026-07-18 ユーザー指定）
   '<div class="row" style="margin-bottom:12px">対象月: '+monthPicker() +
   '<button class="btn right" onclick="exportSalonPay()">CSV出力</button></div>' +
   '<div class="kpis">' +
