@@ -1154,8 +1154,9 @@ function vDashboard(){
       const sr = g.sales ? Math.round(s.sales/g.sales*100) : null;
       const pr = g.profit ? Math.round(s.profit/g.profit*100) : null;
       const br = g.buy ? Math.round(s.cost/g.buy*100) : null;
-      return kpi('目標達成率', sr!==null ? sr+'%' : '—',
-        sr!==null ? '売上目標 '+yen(g.sales)+(pr!==null?' ／ 利益 '+pr+'%':'')+(br!==null?' ／ 仕入 '+br+'%':'') : '「月次目標」シートに売上目標を入れると表示'); })() +
+      // 大きい数字に「売上」ラベルを付け、下段は利益・仕入の達成率だけに揃える（2026-07-18 ユーザー指定「何の%か分かるように」）
+      return kpi('目標達成率', sr!==null ? '売上 '+sr+'%' : '—',
+        sr!==null ? [pr!==null?'利益 '+pr+'%':'', br!==null?'仕入 '+br+'%':''].filter(Boolean).join(' ／ ') : '「月次目標」シートに売上目標を入れると表示'); })() +
     kpi('店販品 預かり中', nAzukari+'店舗') +
     kpi('EC商品 預かり中', nEc+'店舗', ecQty?'残 '+ecQty+'点':'') +
   '</div>' +
