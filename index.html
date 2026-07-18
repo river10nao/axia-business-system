@@ -175,6 +175,8 @@ const GAS_URL = 'https://script.google.com/macros/s/AKfycbx6bDkmNDTgS4AWuKdJB3l5
 const BRAND_FEE = 5000, DEFAULT_QUOTA = 200000, MTG_BRAND = 'MTG', TAX = 0.10;
 // 入金が済んだ状態か（最終入金完了 or その先の納品完了。2026-07-18 納品完了追加に伴う共通判定）
 const paidDone = st=>['最終入金完了','納品完了'].includes(String(st||'').trim());
+// 旧スプシ転記フローの一括取り込みボタン表示（2026-07-18 ユーザー要望で非表示。復活はここを true にするだけ）
+const SHOW_LEGACY_IMPORT = false;
 const FLOW = {
   order:      ['商談中','半金入金待ち','振分/発注','回収中','検品/ロット処理中','最終入金待ち','最終入金完了','納品完了'],   // 納品完了=出荷完了が条件の終端（2026-07-18）
   collection: ['回収待ち','検品待ち','ロット処理待ち','ロット処理済み'],
@@ -638,6 +640,7 @@ function vPayments(){
   const bySup = {};   // supId（''=未設定） → lines[]
   const allMonths = new Set();
   rows('collectionLedger').filter(r=>String(r['削除']||'').trim()==='').forEach(r=>{
+    if(String(r['区分']||'').trim()==='在庫') return;   // 余剰在庫の引き当ては仕入ではない（支払い対象外。2026-07-18）
     const qty = num(r['個数']); if(qty<=0) return;
     const supId = String(r['仕入先ID']||'').trim();
     const pid = String(r['商品ID']||'').trim();
@@ -876,7 +879,7 @@ function calcQuota(month){
   const used={};
   const add=(sid,name,brand,amt,isHanbai)=>{ if(!sid||!brand) return; const k=sid+'|'+brand;
     used[k]=used[k]||{sid,name,brand,used:0,hanbai:0}; used[k].used+=amt; if(isHanbai) used[k].hanbai+=amt; };
-  rows('collectionLedger').forEach(r=>{ if(monthOf(r['発注日'])!==month) return;
+  rows('collectionLedger').forEach(r=>{ if(monthOf(r['発注日'])!==month || String(r['区分']||'').trim()==='在庫') return;   // 在庫充当は仕入ではない（2026-07-18）
     add(String(r['サロンID']).trim(), r['サロン名'], brandOf(r['商品ID']), salonCost(r['商品ID'])*num(r['個数']), false); });
   rows('hanbaiOrders').forEach(r=>{ if(monthOf(r['注文日'])!==month) return;
     add(String(r['サロンID']).trim(), r['サロン名'], brandOf(r['商品ID']), salonCost(r['商品ID'])*num(r['個数']), true); });   // 店販/EC分は「内 店販」表示用に別カウント（2026-07-18 ユーザー要望）
@@ -1439,7 +1442,7 @@ function vOrders(){
   return '<h1>受注管理</h1><div class="sub">案件は「商談中」（見積送付）で始まり、請求書①の発行で自動的に「半金入金待ち」へ進みます</div>' +
   '<div class="row" style="margin-bottom:12px">' +
     '<button class="btn pri" onclick="viewState.newOrder=!viewState.newOrder;render()">＋ 案件作成（JAN貼り付け）</button>' +
-    '<button class="btn" onclick="commitOrdersUI()">📥 転記実行分を取込（'+staging+'明細）</button>' +
+    (SHOW_LEGACY_IMPORT ? '<button class="btn" onclick="commitOrdersUI()">📥 転記実行分を取込（'+staging+'明細）</button>' : '') +
     '<input class="search" placeholder="検索（卸先・商品・ID）" value="'+esc(q)+'"'+searchAttrs()+'>' +
     '<button class="btn right" onclick="exportTable(\'受注台帳\',\'orderLedger\')">CSV出力</button></div>' +
   (viewState.newOrder ? newOrderForm() : '') +
@@ -1989,7 +1992,7 @@ function vCollection(){
 
   return '<h1>サロン回収・検品</h1><div class="sub">検品→「ロット処理済み」または「ロット処理なし」で在庫台帳へ自動入庫されます（1回収 = 1サロン = 1箱）</div>' +
   '<div class="row" style="margin-bottom:12px">' +
-    '<button class="btn pri" onclick="if(confirm(\'サロン回収管理（サロン振り分けの結果）を回収台帳へ取り込みますか？\'))act(\'commitCollection\',{},\'回収を取り込みました\',[\'collectionLedger\'])">📥 サロン振り分け分を取込（'+staging+'明細）</button>' +
+    (SHOW_LEGACY_IMPORT ? '<button class="btn pri" onclick="if(confirm(\'サロン回収管理（サロン振り分けの結果）を回収台帳へ取り込みますか？\'))act(\'commitCollection\',{},\'回収を取り込みました\',[\'collectionLedger\'])">📥 サロン振り分け分を取込（'+staging+'明細）</button>' : '') +
     '<button class="btn" onclick="viewState.mbOpen=!viewState.mbOpen;render()">➕ 手動仕入れ（受注なし）</button>' +
     '<button class="btn right" onclick="exportTable(\'回収台帳\',\'collectionLedger\')">CSV出力</button></div>' +
   (viewState.mbOpen ? manualBuyForm() : '') +
@@ -2014,7 +2017,7 @@ function vCollection(){
     const isOpenC = viewState.open && (g.id in viewState.open) ? viewState.open[g.id] : !done;
     const cBrands = [...new Set(g.rows.map(r=>brandOf(r['商品ID'])).filter(Boolean))].join('・');   // 対象受注の横に表示するブランド（複数は「・」列挙。2026-07-17 ユーザー指定）
     return '<details class="ordcard" '+(isOpenC?'open':'')+' ontoggle="(viewState.open=viewState.open||{})[\''+g.id+'\']=this.open"><summary>' + selBox(g.id) +
-      '<b>'+g.id+'</b> '+pill(g.st)+' <span>'+esc(g.salon)+'</span><span class="muted small">'+esc(g.date)+' / '+esc(g.kubun||'卸')+(String(g.rows[0]['仕入先名']||'').trim()?' / 🏭 '+esc(g.rows[0]['仕入先名']):'')+'</span>' +
+      '<b>'+g.id+'</b> '+pill(g.st)+' <span>'+esc(g.salon)+'</span><span class="muted small">'+esc(g.date)+' / '+(String(g.kubun||'卸').trim()==='在庫'?'📦在庫充当':esc(g.kubun||'卸'))+(String(g.rows[0]['仕入先名']||'').trim()?' / 🏭 '+esc(g.rows[0]['仕入先名']):'')+(String(g.rows[0]['引当元']||'').trim()?' / 引当元 '+esc(g.rows[0]['引当元']):'')+'</span>' +
       (String(g.rows[0]['対象受注']||'').trim() ? '<span class="muted small">📋 '+esc(g.rows[0]['対象受注'])+(cBrands?' '+esc(cBrands):'')+'</span>' : '') +
       // 紐づく出荷番号（対象受注→出荷の逆引き。2026-07-18 ユーザー要望「それぞれの場所で見れるように」）
       (()=>{ const oids=String(g.rows[0]['対象受注']||'').split(',').map(x=>x.trim()).filter(Boolean);
@@ -2397,7 +2400,7 @@ function vQuota(){
   const salonN = rows('salons').filter(s=>String(s['サロンID']||'').trim() && ['サロン',''].includes(String(s['種別']||'').trim()) && String(s['ストップ']||'').trim()==='').length;
   const usedByBrand = {}, usedBySup = {};
   const addUse = (b, sup, v)=>{ usedByBrand[b]=(usedByBrand[b]||0)+v; (usedBySup[b]=usedBySup[b]||{})[sup]=num((usedBySup[b]||{})[sup])+v; };
-  rows('collectionLedger').forEach(r=>{ if(monthOf(r['発注日'])!==selMonth || String(r['区分']||'卸').trim()==='外注') return;
+  rows('collectionLedger').forEach(r=>{ if(monthOf(r['発注日'])!==selMonth || ['外注','在庫'].includes(String(r['区分']||'卸').trim())) return;   // 在庫充当は仕入ではない（2026-07-18）
     const b=brandOf(r['商品ID']); if(!b) return;
     addUse(b, String(r['仕入先名']||r['仕入先ID']||'').trim()||'（仕入先未記録）', salonCost(r['商品ID'])*num(r['個数'])); });
   rows('hanbaiOrders').forEach(r=>{ if(monthOf(r['注文日'])!==selMonth) return;
@@ -2539,6 +2542,12 @@ function allocToggleSalon(gi, id, on){ allocGroups()[gi].sel[id]=on; render(); }
 function allocGroupSup(gi, v){ allocGroups()[gi].sup=v; render(); }
 function allocGroupAdd(){ allocGroups().push({sup:'', sel:{}}); render(); }
 function allocGroupDel(gi){ allocGroups().splice(gi,1); allocDualInvalidate(); }
+// 📦 余剰在庫からの引き当て（2026-07-18 ユーザー承認設計）: conf.stockUse = {在庫ID: 引当数}
+function allocStockUse(zid, v){ const c=ALLOC.conf[ALLOC.brand]=ALLOC.conf[ALLOC.brand]||{}; const u=c.stockUse=c.stockUse||{}; const n=Math.max(0,Math.round(num(v))); if(n>0) u[zid]=n; else delete u[zid]; render(); }
+function allocStockLots(items){   // このブランドの商品の引き当て可能ロット（区分=卸/空欄・残数>0）
+  const pids = new Set(items.map(i=>i.pid));
+  return rows('stock').filter(z=>pids.has(String(z['商品ID']||'').trim()) && ['','卸'].includes(String(z['区分']||'').trim()) && num(z['残数'])>0);
+}
 function allocConf(k, v){ const c=ALLOC.conf[ALLOC.brand]=ALLOC.conf[ALLOC.brand]||{}; c[k]=v; }
 // 2社仕入れ（2026-07-18 ユーザー要望）: 仕入枠の「1サロン20万」はディーラー1社あたり。
 // 2社使えるブランドは、同じサロンに「2枠目」（別ディーラー経由・枠も別）を作って倍まで仕入れられる。
@@ -2561,8 +2570,24 @@ function allocCalc(){
   const salonIds = groups.flatMap((g,gi)=>g.ids.map(s=>gi>0 ? s+'#'+(gi+1) : s));
   if(salonIds.length !== new Set(salonIds).size){ toast('同じサロンが同じグループ内で重複しています', true); return; }
   if(salonIds.length && !budget){ toast('1サロンの枠金額（円）を入れてください', true); return; }
-  const items = allocItems(brand);
-  if(!items.length){ toast('このブランドの商品がありません', true); return; }
+  const itemsRaw = allocItems(brand);
+  if(!itemsRaw.length){ toast('このブランドの商品がありません', true); return; }
+  // 📦 余剰在庫からの引き当て: 引当分を必要数から先に差し引く（残りをサロン/外注へ配る。2026-07-18）
+  const stockUse = conf.stockUse||{};
+  const lotOf = {}; allocStockLots(itemsRaw).forEach(z=>lotOf[String(z['在庫ID']).trim()]=z);
+  const stockByPid = {};
+  const stockLines = [];
+  for(const zid of Object.keys(stockUse)){
+    const q = num(stockUse[zid]); if(q<=0) continue;
+    const z = lotOf[zid];
+    if(!z){ toast('引当中の在庫ロットが見つかりません（削除・完売の可能性）: '+zid, true); return; }
+    if(q > num(z['残数'])){ toast('在庫の残数を超えています: '+zid+'（残 '+num(z['残数'])+'）', true); return; }
+    const zpid = String(z['商品ID']).trim();
+    stockByPid[zpid] = num(stockByPid[zpid]) + q;
+    stockLines.push({zid, pid:zpid, name:String(z['商品名']||''), size:String(z['容量']||''), qty:q});
+  }
+  for(const i of itemsRaw){ if(num(stockByPid[i.pid]) > i.need){ toast('在庫引当が必要数を超えています: '+i.name+'（必要 '+i.need+'・引当 '+num(stockByPid[i.pid])+'）', true); return; } }
+  const items = itemsRaw.map(i=>({...i, need: i.need - num(stockByPid[i.pid])}));
   // 🤝外注仕入枠は②で事前指定（2026-07-18 ユーザー要望「計算の前に外注の枠を入れて、その上で割り振る」）。
   // 計算順: ①金額枠ありの外注先へ先取り（上の行から・枠は外注先への支払額ベース） → ②自社サロンへ均等配分 → ③枠が空欄の外注先が余りを全部吸収
   const coutsRaw = ALLOC.mode!=='own' ? (conf.outs||[]) : [];
@@ -2602,7 +2627,7 @@ function allocCalc(){
       if(give>0){ o.q[i.pid]=(o.q[i.pid]||0)+give; rem[i.pid]-=give; }
     });
   });
-  const res = { salonIds, items, m, budget, cap, outs:routs };
+  const res = { salonIds, items, m, budget, cap, outs:routs, stock:stockLines };
   if(groups.length){
     // 仕入先の既定: グループで選んだディーラー（未選択グループはブランドの扱いディーラー候補をグループ順に）
     const cands = allocBrandDealers(brand);
@@ -2823,6 +2848,18 @@ function vAllocation(){
       (showUnit?'<td class="num"><input type="number" value="'+(i.unit>1?i.unit:'')+'" min="1" placeholder="1（バラ）" onchange="allocUnit(\''+i.pid+'\',this.value)" style="width:84px;text-align:right"></td>':'')+'</tr>').join('') +
     '</table></div>' +
     (showUnit?'<p class="muted small" style="margin:6px 0 0">マスタの値が自動で入ります。今回だけ変えるならここで書き換え（バラに戻す=1）。</p>':'')+'</details>'; })() +
+    // 📦 余剰在庫から引き当て（このブランドの商品の在庫があるときだけ表示。2026-07-18 ユーザー承認設計）
+    (()=>{ const lots = allocStockLots(items); if(!lots.length) return '';
+      const u = conf.stockUse||{};
+      const total = Object.keys(u).reduce((a,z)=>a+num(u[z]),0);
+      return '<div style="margin-top:10px;padding:10px 12px;background:var(--wash);border-radius:10px">' +
+        '<div class="row"><b class="small">📦 余剰在庫から引き当て</b><span class="muted small">引き当てた分は必要数から差し引き。確定した瞬間に在庫から確保され、ロット処理だけ通って出荷できます</span>' +
+        (total?'<span class="small right"><b>計 '+total+'点</b></span>':'') + '</div>' +
+        '<div style="overflow-x:auto"><table style="margin-top:6px;width:auto"><tr><th>在庫ID</th><th>商品</th><th class="num">残数</th><th class="num">引き当て数</th></tr>' +
+        lots.map(z=>{ const zid=String(z['在庫ID']).trim();
+          return '<tr><td class="mono small">'+esc(zid)+'</td><td class="small">'+esc(z['商品名'])+' '+esc(z['容量']||'')+'</td><td class="num">'+num(z['残数'])+'</td>' +
+          '<td class="num"><input type="number" value="'+(num(u[zid])||'')+'" min="0" max="'+num(z['残数'])+'" onchange="allocStockUse(\''+zid+'\',this.value)" style="width:72px;text-align:right"></td></tr>'; }).join('') +
+        '</table></div></div>'; })() +
     // 🤝外注仕入枠（計算前の設定・自社サロンのみモードでは出さない）: 受注の仕入れ形態の外注先が自動で行に入る。
     // 金額枠あり=🧮計算でその外注先へ先取り（支払額ベース・上の行から順）／枠が空欄=自社サロンに配ったあとの余りを全部吸収
     (()=>{ if(allocMode==='own') return '';
@@ -2909,6 +2946,9 @@ function vAllocation(){
         '<td class="num"><b>'+yen(money)+'</b>'+(num(o.budget)&&money>num(o.budget)?' <span class="small" style="color:var(--crit)">⚠枠超過</span>':'')+'</td>' +
         '<td><button class="btn sm" onclick="allocOutFill('+gi+')">🔁 余りをここへ（枠まで）</button></td></tr>'; }).join('') +
       '</table></div>' : '') +
+      ((r.stock||[]).length ? '<div class="row small" style="margin-top:8px;padding:8px 12px;background:var(--wash);border-radius:10px"><b>📦 在庫充当:</b> ' +
+        r.stock.map(x=>esc(x.name)+'×'+x.qty+'（'+esc(x.zid)+'）').join('　') +
+        '<span class="muted">確定時に在庫から確保→区分=在庫の回収（ロット処理待ち）になります</span></div>' : '') +
       // 列の色分け（2026-07-18 ユーザー要望）: 「（2枠目）」表記の代わりに、仕入先ディーラー別＋外注先別に列の背景色で判別する
       (()=>{ const supColor = {}; let ci = 0;
         const colorFor = sup=>{ if(!sup) return ''; if(!(sup in supColor)) supColor[sup] = 'var(--s'+((ci++ % 6)+1)+')'; return supColor[sup]; };
@@ -3027,7 +3067,8 @@ async function allocCommit(){
       items: oi, out:true });
   }
   const total = lines.reduce((a,l)=>a+l.items.reduce((b,x)=>b+x.qty,0),0);
-  if(!lines.length){ toast('個数が1以上のサロンがありません', true); return; }
+  const stockTotal = (r.stock||[]).reduce((a,x)=>a+num(x.qty),0);
+  if(!lines.length && !stockTotal){ toast('個数が1以上のサロンがありません', true); return; }
   // 余りが残っている間は確定できない（ボタン側でも塞いでいるが、下書き再開などの抜け道防止で二重ガード。2026-07-18）
   const shortLeft = r.items.reduce((a,i)=>{
     const asg = r.salonIds.reduce((x,s)=>x+num((r.m[s]||{})[i.pid]),0);
@@ -3049,8 +3090,8 @@ async function allocCommit(){
   const supText = !hasWholesale ? '' :
     splitUsed ? '\n仕入先（枠ごと）:\n' + lines.filter(l=>!l.out).map(l=>'　'+slotName(names,l.slot)+' ← '+supLabelOf(l.supplierId)).join('\n')
               : (r.supplier ? '\n仕入先: '+supLabelOf(r.supplier) : '');
-  if(!confirm(brand+' の割り振りを確定します。\n対象受注: '+selIds.join(', ')+supText+'\nサロン '+salonCount+'枠・合計 '+total+'点'+(outTotal?'（うち🤝外注 '+outTotal+'点）':'')+' を「回収待ち」で回収・検品に登録します。\n\n⚠ 確定後は、この画面での振り分けの修正はできません（直す場合は回収・検品側で該当の回収を削除してやり直しになります）。よろしいですか？')) return;
-  const res = await act('commitAllocation', {brand, orderIds:selIds, lines, supplierId:r.supplier||''}, brand+' の回収データを作成しました', ['collectionLedger']);
+  if(!confirm(brand+' の割り振りを確定します。\n対象受注: '+selIds.join(', ')+supText+'\nサロン '+salonCount+'枠・合計 '+total+'点'+(outTotal?'（うち🤝外注 '+outTotal+'点）':'')+(stockTotal?'＋📦在庫充当 '+stockTotal+'点（確定時に在庫から確保）':'')+' を「回収待ち」で回収・検品に登録します。\n\n⚠ 確定後は、この画面での振り分けの修正はできません（直す場合は回収・検品側で該当の回収を削除してやり直しになります）。よろしいですか？')) return;
+  const res = await act('commitAllocation', {brand, orderIds:selIds, lines, supplierId:r.supplier||'', stock:r.stock||[]}, brand+' の回収データを作成しました', ['collectionLedger','stock','stockLog']);
   if(res){
     delete ALLOC.result[brand];
     apiPost('deleteAllocDraft', {brand}, ['allocDrafts']).then(()=>render()).catch(()=>{});   // 確定したブランドの下書きは自動削除（無ければ何もしない）
