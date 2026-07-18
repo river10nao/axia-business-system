@@ -485,7 +485,10 @@ function navCounts(){
     hanbai:     uniq(rows('hanbaiOrders'),     '注文ID', st=>st!=='お渡し済み' && st!=='完売'),
     // 振り分けは下書き数ではなく「振分が終わっていない案件」数（2026-07-18 ユーザー指定）
     allocation: (()=>{ const cov = allocCoverage();
-      return allocOrderGroups().filter(g=>!(g.brands.size>0 && [...g.brands].every(b=>{ const e=(cov[g.id]||{})[b]; return e&&e.done; }))).length; })()
+      return allocOrderGroups().filter(g=>!(g.brands.size>0 && [...g.brands].every(b=>{ const e=(cov[g.id]||{})[b]; return e&&e.done; }))).length; })(),
+    // 💰支払い: MTG案件のアラート（前払い準備が必要な期間=回収がまだ入庫まで進んでいない間。2026-07-18 ユーザー要望）
+    payments: uniq(rows('collectionLedger').filter(r=>brandOf(String(r['商品ID']||'').trim())==='MTG'), '回収ID',
+      st=>st!=='ロット処理済み' && st!=='ロット処理なし')
   };
 }
 function renderNav(){
