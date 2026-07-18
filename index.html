@@ -2667,16 +2667,19 @@ function vAllocation(){
       if(!conf.outs){ const ids=[...new Set(outTokens.map(t=>outIdOf(t)).filter(Boolean))];
         conf.outs = ids.map(sid=>({sid, budget:''})); if(!conf.outs.length) conf.outs.push({sid:'', budget:''}); }
       const dealers = outSalons.filter(s=>String(s['ストップ']||'').trim()==='');
-      return '<div style="margin-top:10px;padding:8px 10px;border:1px dashed var(--axis);border-radius:10px">' +
+      // 表形式で整列（点線囲い＋行ごとのラベル繰り返しが見づらいとのユーザー指摘 2026-07-18）
+      return '<div style="margin-top:10px;padding:10px 12px;background:var(--wash);border-radius:10px">' +
         '<div class="row"><b class="small">🤝 外注仕入枠</b>' +
-        '<button class="btn sm" onclick="allocCOutAdd()">＋外注先を追加</button>' +
-        '<span class="muted small">枠あり=先にその金額分 → 残りは自社サロン → 枠空欄=余り全部</span></div>' +
-        conf.outs.map((o,gi)=>'<div class="row" style="margin-top:6px;align-items:center">' +
-          '<select onchange="allocCOutSet('+gi+',\'sid\',this.value)"><option value="">外注先を選ぶ</option>' +
-          dealers.map(s=>{ const sid=String(s['サロンID']).trim(); return '<option value="'+sid+'" '+(o.sid===sid?'selected':'')+'>'+esc(salonLabel(s))+'</option>'; }).join('') + '</select>' +
-          '<label class="small">金額枠（円）<br><input type="number" value="'+esc(o.budget||'')+'" onchange="allocCOutSet('+gi+',\'budget\',this.value)" placeholder="例: 300000（空欄=余り全部）" style="width:180px"></label>' +
-          '<label class="small">同一商品の上限（箱/個数）<br><input type="number" value="'+esc(o.cap||'')+'" onchange="allocCOutSet('+gi+',\'cap\',this.value)" placeholder="空欄=無制限" style="width:120px"></label>' +
-          '<button class="btn sm" onclick="allocCOutDel('+gi+')">🗑</button></div>').join('') +
+        '<span class="muted small">金額枠あり=先にその金額分 → 残りは自社サロン → 枠空欄=余り全部</span></div>' +
+        '<table style="margin-top:6px;width:auto"><tr><th>外注先</th><th>金額枠（円）</th><th>同一商品の上限（箱/個数）</th><th></th></tr>' +
+        conf.outs.map((o,gi)=>'<tr>' +
+          '<td><select onchange="allocCOutSet('+gi+',\'sid\',this.value)"><option value="">選んでください</option>' +
+          dealers.map(s=>{ const sid=String(s['サロンID']).trim(); return '<option value="'+sid+'" '+(o.sid===sid?'selected':'')+'>'+esc(salonLabel(s))+'</option>'; }).join('') + '</select></td>' +
+          '<td><input type="number" value="'+esc(o.budget||'')+'" onchange="allocCOutSet('+gi+',\'budget\',this.value)" placeholder="空欄=余り全部" style="width:140px"></td>' +
+          '<td><input type="number" value="'+esc(o.cap||'')+'" onchange="allocCOutSet('+gi+',\'cap\',this.value)" placeholder="空欄=無制限" style="width:120px"></td>' +
+          '<td><button class="btn sm" onclick="allocCOutDel('+gi+')">🗑</button></td></tr>').join('') +
+        '</table>' +
+        '<div style="margin-top:6px"><button class="btn sm" onclick="allocCOutAdd()">＋外注先を追加</button></div>' +
         '</div>'; })() +
     '<div class="row" style="margin-top:10px">' +
     '<label class="small">1サロンの枠金額（円）<br><input type="number" value="'+esc(conf.budget||'')+'" onchange="allocConf(\'budget\',this.value)" placeholder="例: 200000"></label>' +
@@ -2710,27 +2713,29 @@ function vAllocation(){
       (shortTotal>0
         ? '<button class="btn sm right" style="opacity:.55" onclick="toast(\'余りが '+shortTotal+'点 残っています。全て割り振ってから確定してください\', true)">✅ 確定して回収データを作成</button>'
         : '<button class="btn pri sm right" onclick="allocCommit()">✅ 確定して回収データを作成</button>')+'</div>' +
-      // 外注枠のサマリー（枠の指定は②で。ここは結果確認＋🔁での手直し。自社サロンのみモードでは出さない）
-      (allocMode!=='own' && outs.length ? '<div style="margin-top:8px;padding:8px 10px;border:1px dashed var(--axis);border-radius:10px">' +
+      // 外注枠のサマリー（枠の指定は②で。ここは結果確認＋🔁での手直し。表形式で整列・自社サロンのみモードでは出さない）
+      (allocMode!=='own' && outs.length ? '<div style="margin-top:8px;padding:10px 12px;background:var(--wash);border-radius:10px">' +
       '<div class="row"><b class="small">🤝 外注仕入枠の結果</b>' +
-      '<span class="small">余り <b>'+shortTotal+'点</b>'+(outTotal>0?' ／ 外注計 <b>'+outTotal+'点</b>':'')+'</span>' +
+      '<span class="small">余り <b'+(shortTotal>0?' style="color:var(--crit)"':'')+'>'+shortTotal+'点</b>'+(outTotal>0?' ／ 外注計 <b>'+outTotal+'点</b>':'')+'</span>' +
       '<span class="muted small">枠の変更は②で直して🧮押し直し。表の外注列は直接手直しOK</span></div>' +
+      '<table style="margin-top:6px;width:auto"><tr><th>外注先</th><th class="num">枠</th><th class="num">上限</th><th class="num">計</th><th class="num">金額</th><th></th></tr>' +
       outs.map((o,gi)=>{
         const cnt = r.items.reduce((a,i)=>a+num((o.q||{})[i.pid]),0);
         const money = r.items.reduce((a,i)=>a+num((o.q||{})[i.pid])*allocOutUnit(o.sid,i.pid),0);
         const names2 = rows('salons').find(s=>String(s['サロンID']).trim()===o.sid);
-        return '<div class="row" style="margin-top:6px;align-items:center">' +
-        '<b class="small">🤝 '+esc(names2?salonLabel(names2):(o.sid||'外注先未選択'))+'</b>' +
-        '<span class="small muted">枠 '+(num(o.budget)?yen(num(o.budget)):'空欄（余り全部）')+(num(o.cap)?'・同一商品上限 '+num(o.cap):'')+'</span>' +
-        '<span class="small">計 <b>'+cnt+'点</b> ／ <b>'+yen(money)+'</b>'+(num(o.budget)&&money>num(o.budget)?' <span style="color:var(--crit)">⚠枠超過</span>':'')+'</span>' +
-        '<button class="btn sm" onclick="allocOutFill('+gi+')">🔁 余りをここへ（枠まで）</button></div>'; }).join('') +
-      '</div>' : '') +
+        return '<tr><td class="small"><b>'+esc(names2?salonLabel(names2):(o.sid||'外注先未選択'))+'</b></td>' +
+        '<td class="num small">'+(num(o.budget)?yen(num(o.budget)):'—（余り全部）')+'</td>' +
+        '<td class="num small">'+(num(o.cap)?num(o.cap):'—')+'</td>' +
+        '<td class="num"><b>'+cnt+'点</b></td>' +
+        '<td class="num"><b>'+yen(money)+'</b>'+(num(o.budget)&&money>num(o.budget)?' <span class="small" style="color:var(--crit)">⚠枠超過</span>':'')+'</td>' +
+        '<td><button class="btn sm" onclick="allocOutFill('+gi+')">🔁 余りをここへ（枠まで）</button></td></tr>'; }).join('') +
+      '</table></div>' : '') +
       // 🏭 仕入先（支払い集計用。2026-07-18）: マスタのディーラー行の掛け率列からこのブランドの扱いディーラーを判定。
       // 複数該当（同一ブランドを2社が扱う等）は選択必須。1社なら自動で入れる（変更もできる）
       (()=>{ const dl = rows('salons').filter(s=>String(s['種別']||'').trim()==='ディーラー' && String(s['サロンID']||'').trim());
         const cands = dl.filter(s=>Object.keys(s).some(k=>{ const m=String(k).match(/^([^（(]+)[（(][^）)]*[%％][）)]\s*$/); return m && m[1].trim() && brand.indexOf(m[1].trim())===0 && String(s[k]).trim()!==''; }));
         if(!r.supplier && cands.length===1) r.supplier = String(cands[0]['サロンID']).trim();
-        return '<div class="row" style="margin-top:8px;padding:8px 10px;border:1px dashed var(--axis);border-radius:10px;align-items:center">' +
+        return '<div class="row" style="margin-top:8px;padding:10px 12px;background:var(--wash);border-radius:10px;align-items:center">' +
           '<b class="small">🏭 仕入先（どのディーラーから仕入れるか）</b>' +
           '<select onchange="allocSupplier(this.value)"><option value="">選んでください</option>' +
           dl.map(s=>{ const sid=String(s['サロンID']).trim(); return '<option value="'+sid+'" '+(r.supplier===sid?'selected':'')+'>'+esc(salonLabel(s))+'</option>'; }).join('') + '</select>' +
