@@ -1894,6 +1894,18 @@ function vCollection(){
   const counts = {'すべて':list.length};
   FLOW.collection.concat(['ロット処理なし']).forEach(st=>counts[st]=list.filter(g=>g.st===st).length);
   if(tab!=='すべて') list = list.filter(g=>g.st===tab);
+  // 検索（受注ID/回収ID/サロン名/商品名）＋ブランド絞り込み（2026-07-18 ユーザー要望。受注番号→対象受注列で紐づく回収が出る）
+  const q = (viewState.q||'').trim();
+  if(q) list = list.filter(g=> String(g.id).includes(q) || String(g.salon||'').includes(q) ||
+    g.rows.some(r=> String(r['対象受注']||'').includes(q) || String(r['商品名']||'').includes(q)));
+  const allBrands = [...new Set(Object.values(groups).flatMap(g=>g.rows.map(r=>brandOf(r['商品ID'])||'（不明）')))].sort();
+  const bsel = viewState.cBrand || 'すべて';
+  if(bsel!=='すべて') list = list.filter(g=>g.rows.some(r=>(brandOf(r['商品ID'])||'（不明）')===bsel));
+  // 仕入先の絞り込み（回収行の仕入先名。未記録の旧行は「（未記録）」でまとめる）
+  const supOf = r=>String(r['仕入先名']||'').trim()||'（未記録）';
+  const allSups = [...new Set(Object.values(groups).flatMap(g=>g.rows.map(supOf)))].sort();
+  const ssel = viewState.cSup || 'すべて';
+  if(ssel!=='すべて') list = list.filter(g=>g.rows.some(r=>supOf(r)===ssel));
   const staging = rows('collection').length;
   // 一括バーの追加ボタン。終端ステータス（ロット処理済み/なし）のタブでは
   // 「次へ進める」「ロット処理なしで入庫」を出さない（一括削除だけ残す）
@@ -1908,6 +1920,15 @@ function vCollection(){
     '<button class="btn" onclick="viewState.mbOpen=!viewState.mbOpen;render()">➕ 手動仕入れ（受注なし）</button>' +
     '<button class="btn right" onclick="exportTable(\'回収台帳\',\'collectionLedger\')">CSV出力</button></div>' +
   (viewState.mbOpen ? manualBuyForm() : '') +
+  // 検索・絞り込み（受注番号を入れるとその受注に紐づく回収が出る。2026-07-18 ユーザー要望）
+  '<div class="row" style="margin-bottom:10px">' +
+    '<input class="search" placeholder="検索（受注ID・回収ID・サロン・商品）" value="'+esc(q)+'"'+searchAttrs()+' style="max-width:280px">' +
+    '<label class="small">ブランド <select onchange="viewState.cBrand=this.value;render()"><option '+(bsel==='すべて'?'selected':'')+'>すべて</option>' +
+      allBrands.map(b=>'<option '+(b===bsel?'selected':'')+'>'+esc(b)+'</option>').join('')+'</select></label>' +
+    '<label class="small">仕入先 <select onchange="viewState.cSup=this.value;render()"><option '+(ssel==='すべて'?'selected':'')+'>すべて</option>' +
+      allSups.map(s=>'<option '+(s===ssel?'selected':'')+'>'+esc(s)+'</option>').join('')+'</select></label>' +
+    ((q||bsel!=='すべて'||ssel!=='すべて') ? '<span class="small muted">'+list.length+'件ヒット</span><button class="btn sm" onclick="viewState.q=\'\';viewState.cBrand=\'すべて\';viewState.cSup=\'すべて\';render()">✕ クリア</button>' : '') +
+  '</div>' +
   tabsHtml('collection', tab, counts, ['ロット処理なし']) +
   '<div class="row" style="margin-bottom:10px">'+bulkBar('collection', list.map(g=>g.id), noLotBulk, terminalTab)+'</div>' +
   (list.map(g=>{
@@ -1920,7 +1941,7 @@ function vCollection(){
     const isOpenC = viewState.open && (g.id in viewState.open) ? viewState.open[g.id] : !done;
     const cBrands = [...new Set(g.rows.map(r=>brandOf(r['商品ID'])).filter(Boolean))].join('・');   // 対象受注の横に表示するブランド（複数は「・」列挙。2026-07-17 ユーザー指定）
     return '<details class="ordcard" '+(isOpenC?'open':'')+' ontoggle="(viewState.open=viewState.open||{})[\''+g.id+'\']=this.open"><summary>' + selBox(g.id) +
-      '<b>'+g.id+'</b> '+pill(g.st)+' <span>'+esc(g.salon)+'</span><span class="muted small">'+esc(g.date)+' / '+esc(g.kubun||'卸')+'</span>' +
+      '<b>'+g.id+'</b> '+pill(g.st)+' <span>'+esc(g.salon)+'</span><span class="muted small">'+esc(g.date)+' / '+esc(g.kubun||'卸')+(String(g.rows[0]['仕入先名']||'').trim()?' / 🏭 '+esc(g.rows[0]['仕入先名']):'')+'</span>' +
       (String(g.rows[0]['対象受注']||'').trim() ? '<span class="muted small">📋 '+esc(g.rows[0]['対象受注'])+(cBrands?' '+esc(cBrands):'')+'</span>' : '') +
       '<span class="right mono">'+qty+'点</span></summary>' +
       '<div class="tblwrap" style="margin-top:8px"><table><tr><th>商品</th><th>容量</th><th class="num">個数</th><th>在庫ID</th></tr>' +
