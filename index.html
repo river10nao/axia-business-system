@@ -1700,11 +1700,13 @@ const DOC_KIND_UI_VIA = ()=>[['viaOrder','🔁 発注書（'+NM.via+'→'+NM.co+
 function docListHtml(orderId){
   const docs = rows('docLog').filter(d=>String(d['受注ID']).trim()===String(orderId).trim());
   if(!docs.length) return '';
+  // 削除済み（ゴミ箱方式）は打ち消し表示・PDFリンクなし（PDFはDriveのゴミ箱にあるため）
   return '<div class="small" style="margin-top:8px"><b class="muted">発行済み帳票</b><table style="margin-top:4px">' +
     '<tr><th>管理番号</th><th>種類</th><th>名義</th><th>発行日</th><th class="num">金額(税込)</th><th></th><th></th></tr>' +
-    docs.map(d=>'<tr><td class="mono">'+esc(d['管理番号'])+'</td><td>'+esc(d['種類'])+'</td><td>'+esc(d['名義'])+'</td><td>'+esc(d['発行日'])+'</td><td class="num">'+yen(num(d['金額（税込）']))+'</td>' +
-      '<td><a href="'+esc(d['PDF URL'])+'" target="_blank" rel="noopener">PDFを開く</a></td>' +
-      '<td>'+'<button class="btn sm" style="color:var(--crit)" onclick="deleteDocUI(\''+esc(d['管理番号'])+'\',\''+esc(d['PDF URL'])+'\')">🗑</button>'+'</td></tr>').join('') + '</table></div>';
+    docs.map(d=>{ const del = String(d['削除']||'').trim()!=='';
+      return '<tr'+(del?' style="text-decoration:line-through;opacity:.55"':'')+'><td class="mono">'+esc(d['管理番号'])+'</td><td>'+esc(d['種類'])+'</td><td>'+esc(d['名義'])+'</td><td>'+esc(d['発行日'])+'</td><td class="num">'+yen(num(d['金額（税込）']))+'</td>' +
+      '<td>'+(del?'<span class="muted">削除済み</span>':'<a href="'+esc(d['PDF URL'])+'" target="_blank" rel="noopener">PDFを開く</a>')+'</td>' +
+      '<td>'+(del?'':'<button class="btn sm" style="color:var(--crit)" onclick="deleteDocUI(\''+esc(d['管理番号'])+'\',\''+esc(d['PDF URL'])+'\')">🗑</button>')+'</td></tr>'; }).join('') + '</table></div>';
 }
 // 発行済み帳票の削除（admin）。台帳=ゴミ箱方式・PDF=Driveのゴミ箱（30日は復元可）
 async function deleteDocUI(docNo, url){
