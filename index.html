@@ -244,20 +244,21 @@ async function doLogin(){
 }
 function logout(){ localStorage.removeItem('gyomu_biz_token'); localStorage.removeItem('gyomu_biz_snap'); location.reload(); }
 
-// ===== 表示モード（自動=OS設定 / ライト / ダーク。端末ごとに記憶） =====
+// ===== 表示モード（ライト / ダーク / 自動=OS設定。端末ごとに記憶・既定はライト 2026-07-18 ユーザー指定） =====
+function themePref(){ return localStorage.getItem('gyomu_biz_theme') || 'light'; }
 function applyTheme(){
-  const t = localStorage.getItem('gyomu_biz_theme') || '';
-  if(t) document.documentElement.dataset.theme = t;
-  else delete document.documentElement.dataset.theme;
+  const t = themePref();
+  if(t==='auto') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = t;
 }
 function themeLabel(){
-  const t = localStorage.getItem('gyomu_biz_theme') || '';
+  const t = themePref();
   return t==='light' ? '☀️ 表示: ライト' : t==='dark' ? '🌙 表示: ダーク' : '🌓 表示: 自動（OS設定）';
 }
 function cycleTheme(){
-  const t = localStorage.getItem('gyomu_biz_theme') || '';
-  const next = t==='' ? 'light' : t==='light' ? 'dark' : '';
-  if(next) localStorage.setItem('gyomu_biz_theme', next); else localStorage.removeItem('gyomu_biz_theme');
+  const t = themePref();
+  const next = t==='light' ? 'dark' : t==='dark' ? 'auto' : 'light';
+  localStorage.setItem('gyomu_biz_theme', next);
   applyTheme(); render();
 }
 applyTheme();
@@ -557,7 +558,7 @@ function renderNav(){
     '<button class="btn sm" onclick="cycleTheme()">'+themeLabel()+'</button><br><br>' +
     '<a href="#" onclick="logout();return false">ログアウト</a></div>';
   // スマホの下タブにもテーマ切替を出す（サイドバー非表示のため。2026-07-16 ユーザー指摘）
-  const mTheme = (localStorage.getItem('gyomu_biz_theme')||'')==='light' ? '☀️' : (localStorage.getItem('gyomu_biz_theme')||'')==='dark' ? '🌙' : '🌓';
+  const mTheme = themePref()==='light' ? '☀️' : themePref()==='dark' ? '🌙' : '🌓';
   document.getElementById('mnav').innerHTML = items.map(n=>'<button class="'+(view===n[0]?'on':'')+'" onclick="go(\''+n[0]+'\')">'+n[1].split(' ')[0]+'<br>'+n[1].split(' ')[1]+badge(n[0])+'</button>').join('') +
     '<button onclick="cycleTheme()">'+mTheme+'<br>表示</button>';
 }
@@ -2216,7 +2217,7 @@ function vHanbai(){
     agg[k].items.push(r);
   });
 
-  const salonOpts = rows('salons').filter(s=>String(s['サロンID']||'').trim()).map(s=>'<option value="'+esc(s['サロンID'])+'">'+esc(s['サロン名(ディーラー含む)']||s['サロン名']||s['サロンID'])+'</option>').join('');
+  const salonOpts = rows('salons').filter(s=>String(s['サロンID']||'').trim() && String(s['ストップ']||'').trim()==='').map(s=>'<option value="'+esc(s['サロンID'])+'">'+esc(s['サロン名(ディーラー含む)']||s['サロン名']||s['サロンID'])+'</option>').join('');   // ストップ中は存在しない扱い（2026-07-18）
   const prodOpts = rows('products').filter(p=>String(p['商品ID']||'').trim()).map(p=>'<option value="'+esc(p['商品ID'])+'">'+esc(p['商品名'])+(p['容量']?' / '+esc(p['容量']):'')+'</option>').join('');
 
   return '<h1>店販注文/EC</h1><div class="sub">店販=回収時に同梱→仕分け→次回訪問時にお渡し。EC=入庫してEC出品中で完了（売れたら在庫の出庫ログへ記帳）</div>' +
@@ -2227,7 +2228,7 @@ function vHanbai(){
     '<input id="hbQty" type="number" min="1" value="1" style="width:80px">' +
     // 請求元 = 注文サイトの会社（種別=ディーラーから自動。支払い集計に使う。2026-07-17 支払い設計）
     '<select id="hbBiller" style="max-width:180px"><option value="">請求元（任意）</option>' +
-      rows('salons').filter(s=>String(s['種別']||'').trim()==='ディーラー'&&String(s['サロンID']||'').trim()).map(s=>'<option value="'+esc(s['サロンID'])+'">'+esc(salonLabel(s))+'</option>').join('') + '</select>' +
+      rows('salons').filter(s=>String(s['種別']||'').trim()==='ディーラー'&&String(s['サロンID']||'').trim()&&String(s['ストップ']||'').trim()==='').map(s=>'<option value="'+esc(s['サロンID'])+'">'+esc(salonLabel(s))+'</option>').join('') + '</select>' +
     '<button class="btn pri" onclick="addHanbaiUI()">受付</button></div>' +
     '<p class="muted small" style="margin:6px 0 0">請求元＝その注文の請求書が来る会社（注文サイトの運営元）。選んでおくと支払いの集計に載ります</p></div>' +
   '<div class="row" style="margin-bottom:12px"><button class="btn right" onclick="exportTable(\'店販EC注文\',\'hanbaiOrders\')">CSV出力</button></div>' +
@@ -2353,6 +2354,9 @@ function vQuota(){
   // 使っていないサロンも空バーで全件出す（2026-07-18 ユーザー要望）。ストップ中・ディーラー・外注は除外
   rows('salons').filter(s=>String(s['サロンID']||'').trim() && ['サロン',''].includes(String(s['種別']||'').trim()) && String(s['ストップ']||'').trim()==='')
     .forEach(s=>{ const sid=String(s['サロンID']).trim(); if(!bySalon[sid]) bySalon[sid]={sid, name:salonLabel(s), brands:[]}; });
+  // ストップ中のサロンは存在しない扱い: 使用実績があってもバーに出さない（2026-07-18 ユーザー指定）
+  rows('salons').filter(s=>String(s['ストップ']||'').trim()!=='')
+    .forEach(s=>{ delete bySalon[String(s['サロンID']||'').trim()]; });
   // ブランド→色の割当は全サロン共通・固定順（同じブランドはどのサロンでも同じ色）
   const allBrands = [...new Set(lines.map(l=>l.brand))].sort();
   const colorOf = b => 'var(--s'+((allBrands.indexOf(b)%6)+1)+')';
@@ -2821,7 +2825,7 @@ function vAllocation(){
       '</table></div>' : '') +
       // 🏭 仕入先（支払い集計用。2026-07-18）: マスタのディーラー行の掛け率列からこのブランドの扱いディーラーを判定。
       // 複数該当（同一ブランドを2社が扱う等）は選択必須。1社なら自動で入れる（変更もできる）
-      (()=>{ const dl = rows('salons').filter(s=>String(s['種別']||'').trim()==='ディーラー' && String(s['サロンID']||'').trim());
+      (()=>{ const dl = rows('salons').filter(s=>String(s['種別']||'').trim()==='ディーラー' && String(s['サロンID']||'').trim() && String(s['ストップ']||'').trim()==='');   // ストップ中は存在しない扱い（2026-07-18）
         const cands = dl.filter(s=>Object.keys(s).some(k=>{ const m=String(k).match(/^([^（(]+)[（(][^）)]*[%％][）)]\s*$/); return m && m[1].trim() && brand.indexOf(m[1].trim())===0 && String(s[k]).trim()!==''; }));
         if(!r.supplier && cands.length===1) r.supplier = String(cands[0]['サロンID']).trim();
         return '<div class="row" style="margin-top:8px;padding:10px 12px;background:var(--wash);border-radius:10px;align-items:center">' +
