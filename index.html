@@ -2303,9 +2303,27 @@ function vSalonPay(){
   (lines.map(l=>'<tr><td>'+esc(l.name)+'<div class="muted small">'+esc(l.sid)+'</div></td><td class="small">'+l.brands.map(esc).join('・')+' <span class="muted">('+l.brands.length+')</span></td>' +
     '<td class="num">'+yen(l.fee)+'</td><td class="num">'+(l.charge?'−'+yen(l.charge).slice(1):'—')+'</td><td class="num"><b>'+yen(l.net)+'</b></td></tr>').join('') || '<tr><td colspan="5" class="muted">この月の対象データがありません</td></tr>') +
   '</table></div>' +
-  '<div class="card tblwrap"><b class="small">MTG 都度払い（'+selMonth+' 発生分・参考）</b><table style="margin-top:8px"><tr><th>サロン</th><th class="num">MTG商品代金（サロン建替）</th></tr>' +
-  (mtgLines.map(l=>'<tr><td>'+esc(l.name)+'</td><td class="num">'+yen(l.mtg)+'</td></tr>').join('') || '<tr><td colspan="2" class="muted">この月のMTG商品はありません</td></tr>') +
-  '</table><p class="muted small" style="margin-top:6px">MTGはサロンが商品代金を立て替えるため、発注の都度'+NM.spay+'経由で支払います（月末まとめ払いの対象外）</p></div>' +
+  // MTG都度払いはオーダーごとにグループ表示（2026-07-18 ユーザー要望。受注に紐づかない手動仕入れ分は「受注なし」でまとめる）
+  (()=>{ const by = {};
+    rows('collectionLedger').forEach(r=>{
+      if(monthOf(r['発注日'])!==selMonth) return;
+      if(brandOf(r['商品ID'])!==MTG_BRAND) return;
+      if(String(r['区分']||'卸').trim()!=='卸') return;   // サロン建替になるのはサロンへ配った分（外注仕入は対象外）
+      const sid=String(r['サロンID']||'').trim(); if(!sid) return;
+      const key = String(r['対象受注']||'').trim() || '受注なし（手動仕入れ）';
+      const g = by[key]=by[key]||{key, salons:{}, total:0};
+      const amt = salonCost(r['商品ID'])*num(r['個数']);
+      (g.salons[sid]=g.salons[sid]||{name:String(r['サロン名']||''), amt:0}).amt += amt;
+      g.total += amt;
+    });
+    const groups = Object.keys(by).sort().map(k=>by[k]);
+    return '<div class="card tblwrap"><b class="small">MTG 都度払い（'+selMonth+' 発生分・参考）</b><table style="margin-top:8px"><tr><th>サロン</th><th class="num">MTG商品代金（サロン建替）</th></tr>' +
+    (groups.map(g=>{
+      const sl = Object.values(g.salons);
+      return '<tr style="background:var(--wash)"><td><b>📋 '+esc(g.key)+'</b> <span class="muted small">サロン '+sl.length+'軒</span></td><td class="num"><b>'+yen(g.total)+'</b></td></tr>' +
+        sl.map(s=>'<tr><td style="padding-left:24px">'+esc(s.name)+'</td><td class="num">'+yen(s.amt)+'</td></tr>').join('');
+    }).join('') || '<tr><td colspan="2" class="muted">この月のMTG商品はありません</td></tr>') +
+    '</table><p class="muted small" style="margin-top:6px">MTGはサロンが商品代金を立て替えるため、発注の都度'+NM.spay+'経由で支払います（月末まとめ払いの対象外）</p></div>'; })() +
   '<p class="muted small">※ MTG・店販/EC請求の単価は商品マスタ「サロン仕入価格（税抜）」を使った参考値です。運用に合わせて精緻化できます。</p>';
 }
 function exportSalonPay(){
