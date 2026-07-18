@@ -2361,8 +2361,31 @@ function vQuota(){
 
   const legend = allBrands.map(b=>'<span class="step"><span class="dot" style="background:'+colorOf(b)+';border-color:'+colorOf(b)+'"></span>'+esc(b)+'</span>').join(' ');
 
+  // ブランド別の仕入れ可能額（上限枠・安全枠の2本と現状比較。2026-07-18 ユーザー要望）
+  // 枠 = 稼働サロン数（種別サロン・ストップ除外）× 1サロンあたりの枠。現状 = 対象月のサロン向け仕入（回収=発注日ベース・外注除く＋店販/EC）のサロン仕入価格
+  const qMax = num(viewState.qMax)||200000, qSafe = num(viewState.qSafe)||150000;
+  const salonN = rows('salons').filter(s=>String(s['サロンID']||'').trim() && ['サロン',''].includes(String(s['種別']||'').trim()) && String(s['ストップ']||'').trim()==='').length;
+  const usedByBrand = {};
+  rows('collectionLedger').forEach(r=>{ if(monthOf(r['発注日'])!==selMonth || String(r['区分']||'卸').trim()==='外注') return;
+    const b=brandOf(r['商品ID']); if(!b) return; usedByBrand[b]=(usedByBrand[b]||0)+salonCost(r['商品ID'])*num(r['個数']); });
+  rows('hanbaiOrders').forEach(r=>{ if(monthOf(r['注文日'])!==selMonth) return;
+    const b=brandOf(r['商品ID']); if(!b) return; usedByBrand[b]=(usedByBrand[b]||0)+salonCost(r['商品ID'])*num(r['個数']); });
+  const capMax = salonN*qMax, capSafe = salonN*qSafe;
+  const leftCell = v=>'<td class="num"'+(v<0?' style="color:var(--crit);font-weight:700"':'')+'>'+(v<0?'超過 '+yen(-v):yen(v))+'</td>';
+  const brandCapCard = '<div class="card tblwrap"><div class="row"><b class="small">📊 ブランド別 仕入れ可能額（'+selMonth+'・稼働サロン '+salonN+'軒）</b>' +
+    '<label class="small">1サロン上限 <input type="number" value="'+qMax+'" onchange="setVS(\'qMax\',this.value)" style="width:100px;text-align:right"></label>' +
+    '<label class="small">1サロン安全枠 <input type="number" value="'+qSafe+'" onchange="setVS(\'qSafe\',this.value)" style="width:100px;text-align:right"></label></div>' +
+    '<table style="margin-top:8px"><tr><th>ブランド</th><th class="num">今月仕入済み</th><th class="num">上限枠（'+salonN+'軒×'+yen(qMax)+'）</th><th class="num">上限まであと</th><th class="num">安全枠（'+salonN+'軒×'+yen(qSafe)+'）</th><th class="num">安全枠まであと</th></tr>' +
+    (Object.keys(usedByBrand).sort((a,b)=>usedByBrand[b]-usedByBrand[a]).map(b=>{
+      const u = usedByBrand[b];
+      return '<tr><td><span class="dot" style="background:'+colorOf(b)+';border-color:'+colorOf(b)+'"></span> '+esc(b)+'</td><td class="num"><b>'+yen(u)+'</b></td>' +
+        '<td class="num">'+yen(capMax)+'</td>'+leftCell(capMax-u)+'<td class="num">'+yen(capSafe)+'</td>'+leftCell(capSafe-u)+'</tr>';
+    }).join('') || '<tr><td colspan="6" class="muted">この月のサロン向け仕入がありません</td></tr>') +
+    '</table><p class="muted small" style="margin-top:6px">「あと」= 枠 − 今月仕入済み。全ブランド同じ枠（サロン数×1サロン枠）で比較しています。1サロンの枠を変えると即再計算されます。</p></div>';
+
   return '<h1>サロン仕入枠</h1><div class="sub">サロンごとに1本のバー。色 = ブランド、バー全体 = そのサロンの枠合計。枠は「枠マスタ」シートで個別設定（未設定は'+yen(DEFAULT_QUOTA)+'/ブランド）</div>' +
   '<div class="row" style="margin-bottom:12px">対象月: '+monthPicker()+'<span class="right steps">'+legend+'</span></div>' +
+  brandCapCard +
   '<div class="card">' +
   (salons.map(s=>{
     // 積み上げセグメント（幅 = 使用額 ÷ サロンの枠合計。100%でクリップ）
