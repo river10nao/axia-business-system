@@ -1602,7 +1602,8 @@ function advanceBtn(entity, id, st, flowOv){
 function rollbackBtn(entity, id, st, flowOv){
   if(busy(entity, id)) return '';
   const flow = flowOv||FLOW[entity], i = flow.indexOf(st);
-  if(i<=0) return '';
+  // 巻き戻しが無いステータスでも、直後の🗑削除が常に右端に揃うようスペーサーを返す（2026-07-18 ユーザー指定）
+  if(i<=0) return '<span class="right"></span>';
   return '<button class="btn sm right" onclick="if(confirm(\''+id+' を「'+flow[i-1]+'」に巻き戻しますか？\'))act(\'setStatus\',{entity:\''+entity+'\',id:\''+id+'\',to:\''+flow[i-1]+'\'},\'巻き戻しました\')">↩ 巻き戻し</button>';
 }
 // ===== 一括ステータス変更（チェックボックス選択） =====
