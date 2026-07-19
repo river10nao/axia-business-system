@@ -376,6 +376,15 @@ function today(){ return new Date().toLocaleDateString('sv-SE').replace(/-/g,'/'
 function rowsAll(name){ return (DB[name]&&DB[name].rows)||[]; }
 function rows(name){ return rowsAll(name).filter(r=>!String(r['削除']||'').trim()); }
 function pill(st){ return '<span class="pill" style="background:color-mix(in srgb,'+(STATUS_COLOR[st]||'var(--muted)')+' 15%, transparent);color:'+(STATUS_COLOR[st]||'var(--muted)')+'">'+esc(st)+'</span>'; }
+// 掛け払い案件は半金が無く「全額請求→入金は最後」のため、受注一覧のピルだけ「請求済み（◯◯）」表記にする
+// （2026-07-19 ユーザー確定。ステータス値・タブ名はそのまま＝見た目だけの読み替え）
+function orderPill(st, pay){
+  if(NM.credit && String(pay||'').indexOf(NM.credit)===0 && st==='半金入金待ち'){
+    const c = STATUS_COLOR[st]||'var(--muted)';
+    return '<span class="pill" style="background:color-mix(in srgb,'+c+' 15%, transparent);color:'+c+'">請求済み（'+esc(NM.credit)+'）</span>';
+  }
+  return pill(st);
+}
 // 検索欄の共通入力ハンドラ。日本語入力（IME）の変換中は再描画しない
 // （変換中に描き直すと入力途中の語が「nな」のように壊れるため。確定した瞬間に絞り込む）
 // 注意: oncompositionstart はHTML属性ではブラウザが発火しないため、document への委任で拾う
@@ -1596,7 +1605,7 @@ function vOrders(){
     // 全て完了した案件は薄緑の背景で一目で分かるように（お金=最終入金完了 かつ モノ=出荷完了 or 出荷なし。2026-07-16 ユーザー指定）
     const allDone = g.st==='納品完了';
     return '<details class="ordcard" '+(isOpen?'open':'')+(allDone?' style="background:color-mix(in srgb,var(--good) 7%,transparent);border-color:color-mix(in srgb,var(--good) 30%,var(--grid))"':'')+' ontoggle="(viewState.open=viewState.open||{})[\''+g.id+'\']=this.open"><summary>' + selBox(g.id) +
-      '<b>'+g.id+'</b> '+pill(g.st)+(allDone?' <span class="small" style="color:var(--good);font-weight:700">✅完了</span>':'')+' '+readyBadge(g, ship)+(g.via?' <span class="pill" style="background:color-mix(in srgb,var(--s5) 14%,transparent);color:var(--s5)">🔁 '+NM.via+'経由</span>':'')+' <span>'+esc(g.w)+'</span><span class="muted small">'+esc(g.date)+' / '+esc(g.pay||'')+' / '+esc(g.form||'')+'</span>' +
+      '<b>'+g.id+'</b> '+orderPill(g.st, g.pay)+(allDone?' <span class="small" style="color:var(--good);font-weight:700">✅完了</span>':'')+' '+readyBadge(g, ship)+(g.via?' <span class="pill" style="background:color-mix(in srgb,var(--s5) 14%,transparent);color:var(--s5)">🔁 '+NM.via+'経由</span>':'')+' <span>'+esc(g.w)+'</span><span class="muted small">'+esc(g.date)+' / '+esc(g.pay||'')+' / '+esc(g.form||'')+'</span>' +
       '<span class="right mono"><b>'+yen(total)+'</b> <span class="muted small">税抜</span></span></summary>' +
       '<div style="margin-top:10px">'+journeyHtml(g, ship)+'</div>' +
       '<div class="tblwrap" style="margin-top:8px"><table><tr><th>商品</th><th>容量</th><th class="num">個数</th><th class="num">定価</th><th class="num">掛率</th><th class="num">卸値</th><th class="num">小計(税抜)</th></tr>' +
