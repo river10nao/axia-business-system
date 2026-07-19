@@ -649,11 +649,20 @@ function payFmt(d){ return d.toLocaleDateString('sv-SE').replace(/-/g,'/'); }
 // 締め日テキスト（末締め/10日締/都度）から期間キーと支払予定日を出す
 function payPeriod(dateStr, closeTxt, payTxt){
   const d = new Date(String(dateStr||'').replace(/\//g,'-'));
-  if(isNaN(d)) return {key:'zz（日付なし）', label:'（計上日なし）', payLabel:String(payTxt||'')};
+  if(isNaN(d)) return {key:'zz（日付なし）', label:'（計上日なし）', payLabel:String(payTxt||''), pd:null};
   const y=d.getFullYear(), mo=d.getMonth(), day=d.getDate();
   const c = String(closeTxt||'').trim(), p = String(payTxt||'').trim();
   const mm = n=>String(n+1).padStart(2,'0');
-  if(c.indexOf('都度')>=0 || p.indexOf('都度')>=0) return {key:payFmt(d), label:payFmt(d)+' 発注分', payLabel:'都度払い'};
+  // pd = 実際の支払日（Date）。資金繰り出金バーの支払日ベース集計に使う（2026-07-19）。
+  // 支払日テキストから解決できないもの（例: カード引落で引落日未記入）は null → 呼び出し側で仮置き
+  const pdOf = (by, bm)=>{   // by/bm = 締め月（bmは0始まり）
+    if(p.indexOf('当月末')>=0 || /^末払い/.test(p)) return payEom(by,bm);
+    if(p.indexOf('翌月末')>=0) return payEom(by,bm+1);
+    const n2 = p.match(/翌々月\s*(\d+)\s*日/); if(n2) return new Date(by, bm+2, +n2[1]);
+    const n1 = p.match(/翌月\s*(\d+)\s*日/); if(n1) return new Date(by, bm+1, +n1[1]);
+    return null;
+  };
+  if(c.indexOf('都度')>=0 || p.indexOf('都度')>=0) return {key:payFmt(d), label:payFmt(d)+' 発注分', payLabel:'都度払い', pd:d};
   const cm = c.match(/(\d+)\s*日締/);
   if(cm){
     const cut=+cm[1];
@@ -661,25 +670,20 @@ function payPeriod(dateStr, closeTxt, payTxt){
     let payLabel = p;
     if(p.indexOf('当月末')>=0) payLabel = payFmt(payEom(ey,em))+'（当月末）';
     else if(p.indexOf('翌月末')>=0) payLabel = payFmt(payEom(ey,em+1))+'（翌月末）';
-    return {key: ey+'/'+mm(em)+'/'+String(cut).padStart(2,'0'), label: ey+'/'+mm(em)+' '+cut+'日締め分', payLabel};
+    return {key: ey+'/'+mm(em)+'/'+String(cut).padStart(2,'0'), label: ey+'/'+mm(em)+' '+cut+'日締め分', payLabel, pd:pdOf(ey,em)};
   }
   let payLabel = p || '（支払日 確認中）';
   if(p.indexOf('翌月末')>=0) payLabel = payFmt(payEom(y,mo+1))+'（翌月末）';
   else if(p.indexOf('当月末')>=0 || /^末払い/.test(p)) payLabel = payFmt(payEom(y,mo))+'（当月末）';
-  return {key: y+'/'+mm(mo), label: y+'/'+mm(mo)+' 末締め分', payLabel};
+  return {key: y+'/'+mm(mo), label: y+'/'+mm(mo)+' 末締め分', payLabel, pd:pdOf(y,mo)};
 }
-function vPayments(){
+// 仕入明細を仕入先ごとに集める（vPayments と資金繰り出金バーで共用。2026-07-19 支払日ベース化で切り出し）
+// inMonthFn: 計上日で絞る関数（省略=全期間） ／ allMonths: 見つかった計上月を追記するSet（省略可）
+function collectSupplierLines(inMonthFn, allMonths){
   const sal = {}; rows('salons').forEach(s=>{ const sid=String(s['サロンID']||'').trim(); if(sid) sal[sid]=s; });
   const ordDate = {};   // 受注ID → 📦発注日（受注カードで入れた実発注日）
   rows('orderLedger').forEach(r=>{ const id=String(r['受注ID']||'').trim(); if(id && !ordDate[id] && String(r['発注日']||'').trim()) ordDate[id]=String(r['発注日']).trim(); });
-
-  // 対象月フィルタ（計上日の月で絞る。既定=すべて。2026-07-18 ユーザー要望）
-  const payM = viewState.payMonth || 'すべて';
-  const inMonth = dateStr => payM==='すべて' || monthOf(dateStr)===payM;
-
-  // ---- 仕入明細を仕入先ごとに集める ----
   const bySup = {};   // supId（''=未設定） → lines[]
-  const allMonths = new Set();
   rows('collectionLedger').filter(r=>String(r['削除']||'').trim()==='').forEach(r=>{
     if(String(r['区分']||'').trim()==='在庫') return;   // 余剰在庫の引き当ては仕入ではない（支払い対象外。2026-07-18）
     const qty = num(r['個数']); if(qty<=0) return;
@@ -689,8 +693,8 @@ function vPayments(){
     const oids = String(r['対象受注']||'').split(',').map(x=>x.trim()).filter(Boolean);
     const od = oids.map(o=>ordDate[o]).find(Boolean);
     const date = od || String(r['発注日']||'').trim();   // 発注日未入力の間は振分確定日で仮計上
-    allMonths.add(monthOf(date));
-    if(!inMonth(date)) return;
+    if(allMonths) allMonths.add(monthOf(date));
+    if(inMonthFn && !inMonthFn(date)) return;
     const rate = payRateOf(sal[supId], brand);
     const list = num((product(pid)||{})['定価（税抜）']);
     let unit, unitNote='';
@@ -703,6 +707,16 @@ function vPayments(){
       salon:String(r['サロン名']||''), brand, name:String(r['商品名']||''), size:String(r['容量']||''), qty, unit, unitNote,
       amt:unit*qty, isOut:String(r['区分']||'').trim()==='外注'});
   });
+  return {bySup, sal};
+}
+function vPayments(){
+  // 対象月フィルタ（計上日の月で絞る。既定=すべて。2026-07-18 ユーザー要望）
+  const payM = viewState.payMonth || 'すべて';
+  const inMonth = dateStr => payM==='すべて' || monthOf(dateStr)===payM;
+
+  // ---- 仕入明細を仕入先ごとに集める（collectSupplierLines に切り出し。2026-07-19） ----
+  const allMonths = new Set();
+  const {bySup, sal} = collectSupplierLines(inMonth, allMonths);
   rows('hanbaiOrders').forEach(r=>allMonths.add(monthOf(r['注文日'])));
   allMonths.delete('');
   const monthSel = '<select onchange="viewState.payMonth=this.value;render()"><option '+(payM==='すべて'?'selected':'')+'>すべて</option>' +
@@ -1103,7 +1117,7 @@ function vDashboard(){
 
   // 資金繰り（今月のお金の出入り・概算）: 目標vs実績を置換（2026-07-15 ユーザー指定。目標は月次グラフの点線で見る）
   // 入金/出金とも「確定分=ベタ塗り・予定分=斜線」で色分けし、予定の入金は請求書の発行日を出す（2026-07-15 ユーザー指定）
-  // ※ 出金の確定分は暫定で「完了案件の仕入=支払済み扱い」。ディーラー支払いの締め・支払日ルールが決まったら精緻化する（Task #22）
+  // 出金は支払日ベース（2026-07-19 Phase③実装済み）: 仕入先の締め・支払ルールから「対象月に実際に出るお金」を計算
   const FO_ = FLOW.order;
   const docMD = d=>String(d['発行日']||'').trim().replace(/^\d{4}\//,'');   // 発行日 → M/D 表示
   // 入金済みの判定（入金予定 DOC_PEND_RULES の裏返し）: ①は半金入金待ちを過ぎたら、②・全額は最終入金完了で入金済み
@@ -1114,18 +1128,76 @@ function vDashboard(){
   const cashInDone = settledDocs.reduce((a,d)=>a+num(d['金額（税込）']),0);      // 確定分 = 今月発行の請求書で入金済み
   const cashInPend = pendDocs.reduce((a,d)=>a+num(d['金額（税込）']),0);      // 予定分 = 未入金の発行済み請求書（月を跨いだ分も入金まで残る）
   const cashIn = cashInDone + cashInPend;
-  const spLines = calcSalonPay(m);
-  const cashOutSalon = spLines.reduce((a,l)=>a+l.net,0);                      // サロン支払（翌月末振込）= 予定分
-  // 仕入: 進行中案件 = これから支払う予定分。今月受注で最終入金完了まで終わった案件は支払済み（確定分）扱い
-  const buyByW = {}, buyDoneByW = {};
-  // セグメントのラベルは「卸先名/ブランド」（2026-07-15 ユーザー指定。出金が誰向け案件の何の仕入か分かるように）
-  rows('orderLedger').forEach(r=>{ const st=String(r['ステータス']||'').trim(); if(st==='') return;
-    const k=(String(r['卸先名']||'').trim()||'（卸先不明）')+'/'+(brandOf(r['商品ID'])||'ブランド不明'); const c=ownCost(r['商品ID'])*num(r['個数']);
-    if(paidDone(st)){ if(monthOf(r['受注日'])===m) buyDoneByW[k]=(buyDoneByW[k]||0)+c; }
-    else buyByW[k]=(buyByW[k]||0)+c; });
-  const cashOutBuy = Object.values(buyByW).reduce((a,v)=>a+v,0);
-  const cashOutDone = Object.values(buyDoneByW).reduce((a,v)=>a+v,0);
-  const cashOut = cashOutDone + cashOutBuy + cashOutSalon;
+  // 出金 = 支払日ベース（2026-07-19 Phase③実装・ユーザー承認）: 対象月に「実際に口座から出るお金」を支払先×支払日で積む。
+  // 範囲 = 仕入先支払い＋仲介2%＋紹介報酬＋精算代行（前月分の月次精算・振込手数料目安・当月MTG前払い都度）。
+  // サロン直接払いの店販請求元（PAYIDS.maverick）は会社の出金ではないため対象外
+  const todayD = new Date();
+  const outDone = [], outPend = [];   // 確定=支払日が過ぎた/消し込み・前払い済み ／ 予定=これから支払う
+  const pushOut = (label, v, pd, color, paidFlag, tipNote)=>{ if(v<=0 || !pd) return;
+    if(monthOf(payFmt(pd))!==m) return;   // 支払日が対象月のものだけ積む
+    const it = {label:label+' '+(pd.getMonth()+1)+'/'+pd.getDate(), v, color,
+      tip:label+'（支払日 '+payFmt(pd)+'）'+(tipNote||'')};
+    ((paidFlag!=null ? paidFlag : pd<=todayD) ? outDone : outPend).push(it); };
+  const csl = collectSupplierLines();
+  // 1) 仕入先支払い（締め期間→支払日）。支払日が未確定の仕入先（カード引落日未記入等）と仕入先未記録は「翌月末」仮置き
+  Object.keys(csl.bySup).forEach(supId=>{
+    if(supId===PAYIDS.maverick) return;   // サロン直接払い（会社の出金なし）
+    const s = csl.sal[supId]||{}; const isPure = supId===PAYIDS.pure;
+    const per = {};
+    csl.bySup[supId].forEach(l=>{ const pr=payPeriod(l.date, String(s['締め日']||''), String(s['支払日']||'')); (per[pr.key]=per[pr.key]||{pr, sub:0, d0:l.date}).sub+=l.amt; });
+    Object.values(per).forEach(g=>{
+      const total = g.sub + (isPure ? Math.floor(g.sub*0.1) : Math.round(g.sub*0.1));   // 税込（口座請求元は伝票単位切捨の近似）
+      let pd = g.pr.pd, assumed = '';
+      if(!pd){ const d0=new Date(String(g.d0||'').replace(/\//g,'-'));
+        if(!isNaN(d0)){ pd = payEom(d0.getFullYear(), d0.getMonth()+1); assumed='支払日未確定→翌月末と仮定'; } }
+      pushOut((salonLabel(s)||'仕入先未記録')+(assumed?'（仮）':''), total, pd, 'var(--s3)', null, assumed);
+    });
+  });
+  // 2) 仲介手数料2%（口座請求元の対象ブランド分。締め支払は口座請求元と同サイクル）
+  (()=>{ const pureRow=csl.sal[PAYIDS.pure]||{}, brokerRow=csl.sal[PAYIDS.broker]||{};
+    const per={};
+    (csl.bySup[PAYIDS.pure]||[]).filter(l=>l.brand===NM.boxBrand).forEach(l=>{
+      const pr=payPeriod(l.date, String(pureRow['締め日']||''), String(pureRow['支払日']||'')); (per[pr.key]=per[pr.key]||{pr,sub:0}).sub+=l.amt; });
+    Object.values(per).forEach(g=>pushOut((salonLabel(brokerRow)||'仲介')+' 2%', Math.round(g.sub*BROKER_RATE), g.pr.pd, 'var(--s4)'));
+  })();
+  // 3) 紹介報酬（最終入金完了案件。入金②が15日まで→当月末・16日以降→翌10日）
+  rows('wholesalers').filter(w=>String(w['紹介者']||'').trim()).forEach(w=>{
+    const wid=String(w['卸先ID']||'').trim(), rid=String(w['紹介者']||'').trim();
+    const base=String(w['報酬基準']||'利益').trim(); const rv=num(w['報酬率']); const rate=rv>1?rv/100:rv;
+    const byOrder={};
+    rows('orderLedger').filter(r=>String(r['卸先ID']||'').trim()===wid).forEach(r=>{
+      const oid=String(r['受注ID']||'').trim(); if(!oid) return;
+      (byOrder[oid]=byOrder[oid]||{st:String(r['ステータス']||'').trim(), pay2:String(r['入金②日']||'').trim(), sales:0, cost:0});
+      byOrder[oid].sales+=num(r['小計（税抜）']); byOrder[oid].cost+=num(r['個数'])*ownCost(String(r['商品ID']||'').trim()); });
+    Object.values(byOrder).filter(o=>paidDone(o.st)).forEach(o=>{
+      const d=new Date(o.pay2.replace(/\//g,'-')); if(isNaN(d)) return;
+      const pd = d.getDate()<=15 ? payEom(d.getFullYear(), d.getMonth()) : new Date(d.getFullYear(), d.getMonth()+1, 10);
+      pushOut((salonLabel(csl.sal[rid]||{})||'紹介')+'報酬', Math.round((base==='売上'?o.sales:(o.sales-o.cost))*rate), pd, 'var(--s4)');
+    });
+  });
+  // 4) 精算代行: 前月分の月次精算（当月末払い・消し込み済みなら確定扱い）＋振込手数料目安＋当月のMTG前払い（都度）
+  (()=>{ const [cy,cm0]=m.split('/').map(Number);
+    const prevM = cm0===1 ? (cy-1)+'/12' : cy+'/'+String(cm0-1).padStart(2,'0');
+    const spPrev = calcSalonPay(prevM);
+    const spNet = spPrev.reduce((a,l)=>a+Math.max(l.net,0),0);
+    const log = rows('salonPayLog').find(r=>String(r['月']||'').trim()===prevM);
+    pushOut(NM.spay+'精算('+prevM+'分)', log?(num(log['金額'])||spNet):spNet, payEom(cy,cm0-1), 'var(--s5)', log?true:null, log?'消し込み済み':'');
+    const feeSalons = spPrev.filter(l=>l.net>0||l.mtg>0).length;
+    pushOut(NM.spay+'手数料 目安', feeSalons*3500, payEom(cy,cm0-1), 'var(--s5)', log?true:null, feeSalons+'軒×3,500円（実際に振込したサロン数で確定）');
+    let mtgDone2=0, mtgPend2=0;   // MTG前払い（都度）: 当月発生分をMTG前払い済フラグで確定/予定に分ける
+    rows('collectionLedger').forEach(r=>{ if(String(r['削除']||'').trim()!=='') return;
+      if(String(r['区分']||'卸').trim()!=='卸') return;
+      if(monthOf(r['発注日'])!==m) return;
+      const pid=String(r['商品ID']||'').trim(); if(brandOf(pid)!==MTG_BRAND) return;
+      const amt=salonCost(pid)*num(r['個数']);
+      if(String(r['MTG前払い済']||'').trim()!=='') mtgDone2+=amt; else mtgPend2+=amt; });
+    if(mtgDone2>0) outDone.push({label:'MTG前払い済', v:mtgDone2, color:'var(--s5)', tip:'MTG前払い（都度・支払済み）'});
+    if(mtgPend2>0) outPend.push({label:'MTG前払い', v:mtgPend2, color:'var(--s5)', tip:'MTG前払い（都度・未払い）'});
+  })();
+  outDone.sort((a,b)=>b.v-a.v); outPend.sort((a,b)=>b.v-a.v);
+  const cashOutDone = outDone.reduce((a,x)=>a+x.v,0);
+  const cashOutPend = outPend.reduce((a,x)=>a+x.v,0);
+  const cashOut = cashOutDone + cashOutPend;
   const cashNet = cashIn - cashOut;
   const cashMax = Math.max(cashIn, cashOut, Math.abs(cashNet), 1);
   const toSegs = (obj, color, tipPrefix, striped)=>Object.entries(obj).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1])
@@ -1153,13 +1225,12 @@ function vDashboard(){
     cashRow('💰 入金', cashIn, 'ベタ塗り=確定 '+yen(cashInDone)+'（入金済み）／斜線=予定 '+yen(cashInPend)+'（未入金の請求書 '+pendDocs.length+'枚・税込）',
       segsHtml(docSegs(settledDocs, 'var(--s2)', false, '入金済み').concat(
         docSegs(pendDocs, 'var(--s2)', true, '入金予定')))) +
-    cashRow('📤 出金', cashOut, 'ベタ塗り=確定 '+yen(cashOutDone)+'（支払済み扱い）／斜線=予定: <span style="color:var(--s3)">■</span>仕入 '+yen(cashOutBuy)+'（進行中・税抜）＋<span style="color:var(--s5)">■</span>サロン支払 '+yen(cashOutSalon)+'（翌月末）',
-      segsHtml(toSegs(buyDoneByW, 'var(--s3)', '仕入支払済み', false).concat(
-        toSegs(buyByW, 'var(--s3)', '仕入予定', true),
-        spLines.filter(l=>l.net>0).sort((a,b)=>b.net-a.net).map((l,i)=>({label:l.name, v:l.net, color:'var(--s5)', alt:i%2===1, striped:true, tip:'サロン支払予定：'+l.name}))))) +
+    cashRow('📤 出金', cashOut, 'ベタ塗り=確定 '+yen(cashOutDone)+'（支払日経過・消し込み/前払い済み）／斜線=予定 '+yen(cashOutPend)+'。<b>'+m.split('/')[1]+'月に支払日が来るもの</b>を支払先×支払日で表示: <span style="color:var(--s3)">■</span>仕入 <span style="color:var(--s4)">■</span>仲介/紹介 <span style="color:var(--s5)">■</span>精算代行',
+      segsHtml(outDone.map((x,i)=>({label:x.label, v:x.v, color:x.color, alt:i%2===1, striped:false, tip:x.tip})).concat(
+        outPend.map((x,i)=>({label:x.label, v:x.v, color:x.color, alt:i%2===1, striped:true, tip:x.tip}))))) +
     cashRow('🧮 差引の手残り（概算）', cashNet, '',
       segsHtml([{label:cashNet>=0?'手残り':'不足', v:Math.abs(cashNet), color:cashNet>=0?'var(--good)':'var(--crit)', tip:'差引の'+(cashNet>=0?'手残り':'不足分')}])) +
-    '<p class="muted small" style="margin-top:8px">入金の確定＝今月発行の請求書で入金済みのもの（受注のステータス操作で斜線の予定→ベタ塗りの確定に移ります）。出金の確定＝今月受注で完了した案件の仕入（支払済み扱い・暫定）。'+NM.credit+'案件の自社着金は 2026/07受注分のみ翌々月5日（9/5）・8月以降の受注は翌月末（卸先→'+NM.credit+'の支払期日は常に翌月末）・'+NM.via+'経由は卸先入金後すぐ</p>';
+    '<p class="muted small" style="margin-top:8px">入金の確定＝今月発行の請求書で入金済みのもの（受注のステータス操作で斜線の予定→ベタ塗りの確定に移ります）。出金＝支払日ベース（仕入先の締め・支払ルールから計算。支払日が未確定の仕入先は<b>翌月末と仮定</b>して「仮」表示 — サロンマスタの支払日欄に「翌々月5日」等と入れれば自動で正確になります）。'+NM.credit+'案件の自社着金は 2026/07受注分のみ翌々月5日（9/5）・8月以降の受注は翌月末（卸先→'+NM.credit+'の支払期日は常に翌月末）・'+NM.via+'経由は卸先入金後すぐ</p>';
 
   // 入金予定テーブル（請求書ベース: 誰から・いつ・いくら。期限切れは赤）
   const todayStr = today();
