@@ -1730,6 +1730,11 @@ const ADV_ACTION = {
   shipment:   {'引去済':'在庫引き去りする','出荷手配中':'出荷手配開始','出荷完了':'出荷済み'},   // 引去だけ「する」表記（2026-07-20 ユーザー指定。押すと引去が実行されるため）
   hanbai:     {'ディーラー発注済':'ディーラー発注済み','預かり中':'仕分け完了（入庫）','EC出品中':'EC出品済み'}
 };
+// 引去の実行確認。在庫台帳へ出庫が記帳され、以後の巻き戻しはサーバー側でブロックされる（戻すには在庫の逆記帳が必要な個別対応）
+function stockOutConfirmUI(id){
+  if(!confirm('在庫の引き去りを実行します。\n\n⚠ 引き去り後は巻き戻しできません（在庫から出庫が記帳されます）。\nよろしいですか？')) return;
+  act('advanceStatus', {entity:'shipment', id:id}, id+' を「引去済」にしました');
+}
 function advanceBtn(entity, id, st, flowOv){
   if(busy(entity, id)) return busyPill();
   const flow = flowOv||FLOW[entity], i = flow.indexOf(st);
@@ -1737,6 +1742,9 @@ function advanceBtn(entity, id, st, flowOv){
   const next = flow[i+1];
   if(entity==='hanbai' && next==='お渡し済み'){
     return '<button class="btn pri sm" onclick="handoverUI(\''+id+'\')">✔ お渡し済みにする</button>';
+  }
+  if(entity==='shipment' && next==='引去済'){   // 引去は在庫が動き巻き戻し不可のため、実行前に確認を挟む（2026-07-20 ユーザー要望）
+    return '<button class="btn pri sm" onclick="stockOutConfirmUI(\''+id+'\')">✔ 在庫引き去りする（→ 引去済）</button>';
   }
   const actName = (ADV_ACTION[entity]||{})[next];
   const label = actName ? '✔ '+actName+(actName===next?'':'（→ '+next+'）') : '→ '+next;
