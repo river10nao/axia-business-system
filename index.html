@@ -371,7 +371,18 @@ async function downloadManual(){
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function yen(n){ return n==null||isNaN(n) ? '—' : '¥' + Math.round(n).toLocaleString(); }
 function num(v){ if(typeof v==='number') return v; const n=parseFloat(String(v||'').replace(/[,¥￥%％\s]/g,'')); return isNaN(n)?0:n; }
-function monthOf(d){ return String(d||'').replace(/-/g,'/').slice(0,7); }
+function monthOf(d){
+  const s = String(d||'').trim().replace(/-/g,'/');
+  const m = s.match(/^(\d{4})\/(\d{1,2})(?:\/(\d{1,2})(?:[ T].*)?)?$/);
+  if(!m) return '';
+  const y = Number(m[1]), mo = Number(m[2]), day = m[3] ? Number(m[3]) : null;
+  if(mo < 1 || mo > 12) return '';
+  if(day!==null){
+    const dt = new Date(y, mo-1, day);
+    if(day < 1 || dt.getFullYear()!==y || dt.getMonth()!==mo-1 || dt.getDate()!==day) return '';
+  }
+  return y+'/'+String(mo).padStart(2,'0');
+}
 function today(){ return new Date().toLocaleDateString('sv-SE').replace(/-/g,'/'); }
 // rows() は削除済み（ソフト削除フラグあり）の行を自動で除外する。ゴミ箱表示だけ rowsAll() を使う
 function rowsAll(name){ return (DB[name]&&DB[name].rows)||[]; }
@@ -1863,6 +1874,19 @@ function trashSection(entity, sheetName, idCol, labelFn){
 const DOC_KIND_UI = [['quote','見積書'],['invoice1','請求書①（前金）'],['invoice2','請求書②（残金）'],['invoiceFull','請求書（全額請求）'],['delivery','納品書']];
 // 経由案件だけに出す帳票（金額=確定卸値×97%。発注書=経由先発行・自社宛／請求書=自社発行・経由先宛）。名称はログイン後に入るため関数で組む
 const DOC_KIND_UI_VIA = ()=>[['viaOrder','🔁 発注書（'+NM.via+'→'+NM.co+'・97%）'],['viaInvoice1','🔁 請求書①（'+NM.co+'→'+NM.via+'・前金・97%）'],['viaInvoice2','🔁 請求書②（'+NM.co+'→'+NM.via+'・残金・97%）'],['viaInvoiceFull','🔁 請求書（'+NM.co+'→'+NM.via+'・全額・97%）']];
+// 台帳の既存「種類」は連番互換のため変更せず、画面表示だけ発行方向へ統一する。
+function docDisplayLabel(kind){
+  const s = String(kind||'');
+  if(NM.via && s.indexOf(NM.via+'請求書')===0){
+    if(s.indexOf('①')>=0) return '🔁 請求書①（'+NM.co+'→'+NM.via+'・前金・97%）';
+    if(s.indexOf('②')>=0) return '🔁 請求書②（'+NM.co+'→'+NM.via+'・残金・97%）';
+    if(s.indexOf('全額')>=0) return '🔁 請求書（'+NM.co+'→'+NM.via+'・全額・97%）';
+  }
+  if(NM.via && NM.co && s.indexOf(NM.via+'→'+NM.co)>=0 && s.indexOf('発注書')>=0){
+    return '🔁 発注書（'+NM.via+'→'+NM.co+'・97%）';
+  }
+  return s;
+}
 function docListHtml(orderId){
   const docs = rows('docLog').filter(d=>String(d['受注ID']).trim()===String(orderId).trim());
   if(!docs.length) return '';
@@ -1870,7 +1894,7 @@ function docListHtml(orderId){
   return '<div class="small" style="margin-top:8px"><b class="muted">発行済み帳票</b><table style="margin-top:4px">' +
     '<tr><th>管理番号</th><th>種類</th><th>名義</th><th>発行日</th><th class="num">金額(税込)</th><th></th><th></th></tr>' +
     docs.map(d=>{ const del = String(d['削除']||'').trim()!=='';
-      return '<tr'+(del?' style="text-decoration:line-through;opacity:.55"':'')+'><td class="mono">'+esc(d['管理番号'])+'</td><td>'+esc(d['種類'])+'</td><td>'+esc(d['名義'])+'</td><td>'+esc(d['発行日'])+'</td><td class="num">'+yen(num(d['金額（税込）']))+'</td>' +
+      return '<tr'+(del?' style="text-decoration:line-through;opacity:.55"':'')+'><td class="mono">'+esc(d['管理番号'])+'</td><td>'+esc(docDisplayLabel(d['種類']))+'</td><td>'+esc(d['名義'])+'</td><td>'+esc(d['発行日'])+'</td><td class="num">'+yen(num(d['金額（税込）']))+'</td>' +
       '<td>'+(del?'<span class="muted">削除済み</span>':'<a href="'+esc(d['PDF URL'])+'" target="_blank" rel="noopener">PDFを開く</a>')+'</td>' +
       '<td>'+(del?'':'<button class="btn sm" style="color:var(--crit)" onclick="deleteDocUI(\''+esc(d['管理番号'])+'\',\''+esc(d['PDF URL'])+'\')">🗑</button>')+'</td></tr>'; }).join('') + '</table></div>';
 }
@@ -2315,8 +2339,12 @@ function isSurplus(r){
 function stockTable(list, emptyMsg){
   // 商品単位でまとめて商品セルを縦結合（rowspan）。「全体で何個・内どのサロンから何個」が一目で読める形（2026-07-20 ユーザー要望）
   const groups = {}, order = [];
-  list.forEach(r=>{
-    const k = String(r['商品ID']||'').trim() || String(r['商品名'])+'/'+String(r['容量']);
+  list.forEach((r,rowIndex)=>{
+    const pid = String(r['商品ID']||'').trim();
+    const name = String(r['商品名']||'').trim();
+    const size = String(r['容量']||'').trim();
+    // 商品を特定できない空行は互いに結合しない（空欄同士が巨大な1商品に見えるのを防ぐ）。
+    const k = pid || (name || size ? name+'/'+size : '__empty_row_'+rowIndex);
     if(!groups[k]){ groups[k]=[]; order.push(k); }
     groups[k].push(r);
   });
@@ -2666,7 +2694,7 @@ function vQuota(){
 // ☑️した受注の商品をブランドごとにサロンへ割り振り、確定すると回収台帳へ「回収待ち」で登録される。
 // 割り振り: 選んだサロンへ商品ごとに均等配分（2026-07-14 指定。サロン間の差は最大1単位）。
 // 商品マスタ「入数（箱）」が入っている商品は箱単位でのみ配分。空欄=1個ずつ。
-let ALLOC = { sel:{}, brand:null, conf:{}, salons:{}, result:{}, q:'', addOut:false };
+let ALLOC = { sel:{}, brand:null, conf:{}, salons:{}, result:{}, q:'', addOut:false, lastCommit:null };
 
 function unitOf(pid){ const p=product(pid); const u=p?num(p['入数（箱）']):0; return u>0?u:1; }
 function salonLabel(s){ return String(s['サロン名(ディーラー含む)']||s['サロン名']||s['サロンID']||''); }
@@ -2740,7 +2768,18 @@ function allocRun(items, salonIds, budget, cap, spread){
   salonIds.forEach(s=>{ m[s]={}; items.forEach(i=>{ const u=(have[s][i.pid]||0)*i.unit; if(u>0) m[s][i.pid]=u; }); });
   return m;
 }
-function allocToggleOrder(id, on){ ALLOC.sel[id]=on; render(); }
+function allocSelectionKey(){ return Object.keys(ALLOC.sel).filter(k=>ALLOC.sel[k]).sort().join('|'); }
+function allocToggleOrder(id, on){
+  const before = allocSelectionKey();
+  ALLOC.sel[id]=on;
+  const after = allocSelectionKey();
+  if(before!==after){
+    ALLOC.addOut=false;   // 別案件へ「外注も使う」のONを持ち越さない
+    ALLOC.result={};      // 選択受注が変わったら以前の計算結果は無効
+    if(on) ALLOC.lastCommit=null;
+  }
+  render();
+}
 function allocOpenToggle(id){ ALLOC.open=ALLOC.open||{}; ALLOC.open[id]=!ALLOC.open[id]; render(); }
 // 2026-07-20 ユーザー要望: 自社サロンのみの受注でも、振り分け時だけ外注を追加できるようにする
 function allocAddOutToggle(on){
@@ -2924,12 +2963,14 @@ function vAllocation(){
   const cov = allocCoverage();   // 入れ込み済みの受注×ブランド（数量ベース。済み=背景色つき表示・消さない）
   const orderGroups = allocOrderGroups();
   // 2026-07-20 ユーザー要望: 全ブランドの振り分け完了後は選択を外す（数量不足はやり直しのため残す）
+  let autoUnselected = false;
   orderGroups.forEach(g=>{
     const bc = cov[g.id]||{};
     const isDone = g.brands.size>0 && [...g.brands].every(b=>bc[b]&&bc[b].done);
     const hasBroken = [...g.brands].some(b=>bc[b]&&bc[b].broken);
-    if(ALLOC.sel[g.id] && isDone && !hasBroken) delete ALLOC.sel[g.id];
+    if(ALLOC.sel[g.id] && isDone && !hasBroken){ delete ALLOC.sel[g.id]; autoUnselected=true; }
   });
+  if(autoUnselected){ ALLOC.addOut=false; ALLOC.result={}; }
   const selIds = Object.keys(ALLOC.sel).filter(k=>ALLOC.sel[k]);
   const brands = [...new Set(rows('orderLedger').filter(r=>ALLOC.sel[String(r['受注ID']||'').trim()]).map(r=>brandOf(r['商品ID'])||'（メーカー不明）'))].sort();
   if(brands.length && !brands.includes(ALLOC.brand)) ALLOC.brand = brands[0];
@@ -2981,6 +3022,14 @@ function vAllocation(){
       return h;
     }).join('') ||
       '<tr><td colspan="7" class="muted">受注がありません</td></tr>') + '</table></div></div>';
+  if(ALLOC.lastCommit){
+    const lc=ALLOC.lastCommit;
+    html += '<div class="card" style="border-color:'+(lc.warning?'var(--serious)':'var(--good)')+'"><div class="row"><div><b class="small">✅ 振り分けを確定しました</b>' +
+      '<div class="small" style="margin-top:4px">'+esc(lc.brand||'')+' ／ 回収ID: <span class="mono">'+esc((lc.ids||[]).join(', '))+'</span></div>' +
+      (lc.warning?'<div class="small" style="color:var(--serious);margin-top:5px">⚠ '+esc(lc.warning)+'</div>':'')+'</div>' +
+      '<div class="right row">'+(lc.printable&&lc.ids&&lc.ids.length?'<button class="btn sm" onclick="allocPrintDone(\''+esc(lc.brand)+'\',\''+lc.ids.map(esc).join(',')+'\')">🖨 印刷用を開く</button>':'') +
+      '<button class="btn sm" onclick="ALLOC.lastCommit=null;render()">閉じる</button></div></div></div>';
+  }
   if(!selIds.length) return html;
 
   // ② ブランドと条件
@@ -3312,7 +3361,19 @@ async function allocOutBulk(){
   const total = items.reduce((a,x)=>a+x.qty,0);
   if(!confirm('外注のみの一括登録をします。\n対象受注: '+selIds.join(', ')+'\n外注先: '+name+'\n合計 '+total+'点 を回収番号1つで「回収待ち」に登録します。\n\n⚠ 登録後は、この画面での修正はできません（直す場合は回収・検品側で削除してやり直しになります）。よろしいですか？')) return;
   const res = await act('commitOutsourceBulk', {orderIds:selIds, salonId:sid, items}, '外注仕入を登録しました', ['collectionLedger','orderLedger']);
-  if(res){ toast('回収ID: '+res.collectionId+' を作成しました'); render(); }
+  if(res){
+    const warning=allocFormUpdateWarning(res);
+    ALLOC.lastCommit={brand:'外注仕入',ids:[res.collectionId],printable:false,warning};
+    if(warning) toast(warning,true);
+    toast('回収ID: '+res.collectionId+' を作成しました'); render();
+  }
+}
+function allocFormUpdateWarning(res){
+  const parts=[];
+  if(res&&res.formUpdateError) parts.push('受注台帳の仕入れ形態を更新できませんでした: '+res.formUpdateError);
+  const skipped=(res&&res.formUpdateSkippedOrderIds)||[];
+  if(skipped.length) parts.push('仕入れ形態が数式のため更新をスキップ: '+skipped.join(', '));
+  return parts.join(' / ');
 }
 async function allocCommit(){
   const brand = ALLOC.brand, r = ALLOC.result[brand];
@@ -3362,8 +3423,11 @@ async function allocCommit(){
   if(!confirm(brand+' の割り振りを確定します。\n対象受注: '+selIds.join(', ')+supText+'\nサロン '+salonCount+'枠・合計 '+total+'点'+(outTotal?'（うち🤝外注 '+outTotal+'点）':'')+(stockTotal?'＋📦在庫充当 '+stockTotal+'点（確定時に在庫から確保）':'')+' を「回収待ち」で回収・検品に登録します。\n\n⚠ 確定後は、この画面での振り分けの修正はできません（直す場合は回収・検品側で該当の回収を削除してやり直しになります）。よろしいですか？')) return;
   const res = await act('commitAllocation', {brand, orderIds:selIds, lines, supplierId:r.supplier||'', stock:r.stock||[]}, brand+' の回収データを作成しました', ['collectionLedger','orderLedger','stock','stockLog']);
   if(res){
+    const warning=allocFormUpdateWarning(res);
+    ALLOC.lastCommit={brand,ids:res.collectionIds||[],printable:true,warning};
     delete ALLOC.result[brand];
     apiPost('deleteAllocDraft', {brand}, ['allocDrafts']).then(()=>render()).catch(()=>{});   // 確定したブランドの下書きは自動削除（無ければ何もしない）
+    if(warning) toast(warning,true);
     toast('回収ID: '+res.collectionIds.join(', ')+' を作成しました'); render();
   }
 }
