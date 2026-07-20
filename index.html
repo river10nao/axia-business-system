@@ -2997,7 +2997,8 @@ function vAllocation(){
   if(brandDone(brand)){
     const ks = new Set(); selOrders.forEach(r=>{ const e=(cov[String(r['受注ID']).trim()]||{})[brand]; if(e) e.kids.forEach(k=>ks.add(k)); });
     html += '<div class="card" style="opacity:.8"><b class="small">✅ '+esc(brand)+' は回収・検品へ入れ込み済みです</b>' +
-      '<p class="small" style="margin:6px 0 0"><b>回収ID: '+esc(kFmt(ks)||'—')+'</b>（回収・検品画面で確認・印刷できます）</p>' +
+      '<p class="small" style="margin:6px 0 0"><b>回収ID: '+esc(kFmt(ks)||'—')+'</b>（回収・検品画面で確認できます）</p>' +
+      '<div class="row" style="margin-top:8px"><button class="btn sm" onclick="allocPrintDone(\''+esc(brand)+'\',\''+[...ks].join(',')+'\')">🖨 印刷用を開く（PDF保存）</button></div>' +
       '<p class="muted small" style="margin:6px 0 0">やり直す場合は回収・検品側で該当の回収を削除するとここが再び操作できるようになります（一部だけ削除すると数が合わない警告が出ます）</p>' +
       prevHtml + '</div>';
     return html;
@@ -3211,6 +3212,37 @@ function allocPrint(){
     sections + outSection + stockSection +
     (leftovers.length ? '<div class="salon"><h2>配りきれなかった分（余り）</h2><table><tr><th>商品</th><th class="num">余り個数</th></tr>' +
       leftovers.map(x=>'<tr><td>'+esc(x.i.name)+' '+esc(x.i.size||'')+'</td><td class="num">'+x.left+'</td></tr>').join('') + '</table></div>' : '') +
+    '</body></html>');
+  w.document.close();
+}
+// ✅確定後の再印刷: 回収台帳の確定行から振り分け表を再構成する（ALLOC.result が無くても出せる。2026-07-20 ユーザー要望）
+// 金額=サロン仕入価格（税抜）×個数。外注枠・在庫充当分は回収台帳の行として同じ形式で並ぶ
+function allocPrintDone(brand, kidsCsv){
+  const kidSet = new Set(String(kidsCsv).split(',').map(s=>s.trim()).filter(Boolean));
+  const lines = rows('collectionLedger').filter(r=>kidSet.has(String(r['回収ID']||'').trim()));
+  if(!lines.length){ toast('回収台帳に該当の回収が見つかりません', true); return; }
+  const byKid = {};
+  lines.forEach(r=>{ const k=String(r['回収ID']).trim(); (byKid[k]=byKid[k]||[]).push(r); });
+  const orderIds = [...new Set(lines.flatMap(r=>String(r['対象受注']||'').split(',').map(x=>x.trim()).filter(Boolean)))];
+  const sections = Object.keys(byKid).sort().map(kid=>{
+    const rs = byKid[kid];
+    const totalQty = rs.reduce((a,r)=>a+num(r['個数']),0);
+    const totalYen = rs.reduce((a,r)=>a+num(r['個数'])*salonCost(r['商品ID']),0);
+    const sup = String(rs[0]['仕入先名']||'').trim();
+    return '<div class="salon"><h2>'+esc(rs[0]['サロン名']||'')+' <span class="sub">'+esc(kid)+' ／ 計 '+totalQty+'点 ／ ¥'+Math.round(totalYen).toLocaleString()+'（サロン価格・税抜）'+(sup?' ／ 仕入先: '+esc(sup):'')+'</span></h2>' +
+      '<table><tr><th>商品</th><th class="num">個数</th><th class="num">金額</th><th class="chk">回収✓</th><th class="chk">検品✓</th><th class="chk">ロット✓</th></tr>' +
+      rs.map(r=>'<tr><td>'+esc(r['商品名'])+' '+esc(r['容量']||'')+'</td><td class="num">'+num(r['個数'])+'</td><td class="num">¥'+Math.round(num(r['個数'])*salonCost(r['商品ID'])).toLocaleString()+'</td><td class="chk">□</td><td class="chk">□</td><td class="chk">□</td></tr>').join('') +
+      '</table></div>';
+  }).join('');
+  const w = window.open('', '_blank');
+  w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>'+esc(brand)+' サロン振り分け</title>' +
+    '<style>body{font-family:"Hiragino Sans",sans-serif;font-size:12px;margin:24px}h1{font-size:16px}h2{font-size:14px;margin:18px 0 6px;border-left:4px solid #333;padding-left:8px}h2 .sub{font-size:11px;font-weight:normal;color:#555}' +
+    'table{border-collapse:collapse;width:100%}th,td{border:1px solid #999;padding:5px 8px;text-align:left}td.num,th.num{text-align:right;white-space:nowrap}td.chk,th.chk{text-align:center;width:40px;padding:5px 3px}th.chk{font-size:10px}th{background:#f2f2f2;white-space:nowrap}' +
+    '.salon{page-break-inside:avoid;margin-bottom:10px}@page{size:A4 portrait;margin:12mm}@media print{button{display:none}}</style></head><body>' +
+    '<button onclick="print()" style="padding:6px 14px">🖨 印刷 / PDF保存</button>' +
+    '<h1>'+esc(brand)+' サロン振り分け表（'+today()+'）</h1>' +
+    '<p>対象受注: '+orderIds.join(', ')+' ／ 回収ID: '+esc(kFmt(kidSet))+'（確定済み・回収台帳から作成）</p>' +
+    sections +
     '</body></html>');
   w.document.close();
 }
