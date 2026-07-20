@@ -2666,7 +2666,7 @@ function vQuota(){
 // ☑️した受注の商品をブランドごとにサロンへ割り振り、確定すると回収台帳へ「回収待ち」で登録される。
 // 割り振り: 選んだサロンへ商品ごとに均等配分（2026-07-14 指定。サロン間の差は最大1単位）。
 // 商品マスタ「入数（箱）」が入っている商品は箱単位でのみ配分。空欄=1個ずつ。
-let ALLOC = { sel:{}, brand:null, conf:{}, salons:{}, result:{}, q:'' };
+let ALLOC = { sel:{}, brand:null, conf:{}, salons:{}, result:{}, q:'', addOut:false };
 
 function unitOf(pid){ const p=product(pid); const u=p?num(p['入数（箱）']):0; return u>0?u:1; }
 function salonLabel(s){ return String(s['サロン名(ディーラー含む)']||s['サロン名']||s['サロンID']||''); }
@@ -2742,6 +2742,12 @@ function allocRun(items, salonIds, budget, cap, spread){
 }
 function allocToggleOrder(id, on){ ALLOC.sel[id]=on; render(); }
 function allocOpenToggle(id){ ALLOC.open=ALLOC.open||{}; ALLOC.open[id]=!ALLOC.open[id]; render(); }
+// 2026-07-20 ユーザー要望: 自社サロンのみの受注でも、振り分け時だけ外注を追加できるようにする
+function allocAddOutToggle(on){
+  ALLOC.addOut=on;
+  ALLOC.result={};   // モード変更前の計算結果を全ブランド破棄。conf.outs の入力値は保持する
+  render();
+}
 // 割り振りグループ（2026-07-18 ユーザー要望のUI再設計）: 「ディーラーを選ぶ→そのディーラー分のサロンを選ぶ」を＋で増やす。
 // 同じサロンを複数グループで選ぶと、そのサロンは枠2本（ディーラー2社仕入れ）になる。スロットID=グループ1: sid / グループ2: sid#2 …
 function allocGroups(){
@@ -2980,8 +2986,13 @@ function vAllocation(){
   const formTokens = [...new Set(selOrders.flatMap(r=>String(r['仕入れ形態']||'').split('＋').map(t=>t.trim()).filter(Boolean)))];
   const outTokens = formTokens.filter(t=>outNameSet.has(t) || t==='外注' || t==='業者直卸');   // 旧値（外注/業者直卸）も外注系として扱う
   const hasOwn = formTokens.length===0 || formTokens.includes('自社サロン');
-  const allocMode = (!hasOwn && outTokens.length) ? 'out' : (hasOwn && !outTokens.length ? 'own' : 'mixed');
+  const baseAllocMode = (!hasOwn && outTokens.length) ? 'out' : (hasOwn && !outTokens.length ? 'own' : 'mixed');
+  const allocMode = baseAllocMode==='own' && ALLOC.addOut ? 'mixed' : baseAllocMode;
   ALLOC.mode = allocMode;   // allocCalc から参照（own のときは外注枠を使わない）
+  if(baseAllocMode==='own'){
+    html += '<div class="card"><label class="pill" style="cursor:pointer"><input type="checkbox" '+(ALLOC.addOut?'checked':'')+' onclick="allocAddOutToggle(this.checked)" style="width:15px;height:15px;vertical-align:-2px"> <b>🤝 外注も使う</b></label>' +
+      (ALLOC.addOut?'<p class="muted small" style="margin:6px 0 0">受注台帳の仕入れ形態は変わりません。確定した外注分は回収台帳へ外注として登録され、支払い集計に反映されます。</p>':'')+'</div>';
+  }
 
   // ⚡ 外注のみ: サロン割り振りを丸ごとスキップして、全数量を外注先からの回収として一括登録（回収番号1つ）
   // 外注先が2社以上のときは⚡は使わず、②の🤝外注仕入枠で金額枠割りする（サロン0軒でも🧮計算できる）
