@@ -2922,6 +2922,14 @@ function allocOutFill(idx){
 function vAllocation(){
   const needSetup = !((DB.products&&DB.products.headers)||[]).includes('入数（箱）');
   const cov = allocCoverage();   // 入れ込み済みの受注×ブランド（数量ベース。済み=背景色つき表示・消さない）
+  const orderGroups = allocOrderGroups();
+  // 2026-07-20 ユーザー要望: 全ブランドの振り分け完了後は選択を外す（数量不足はやり直しのため残す）
+  orderGroups.forEach(g=>{
+    const bc = cov[g.id]||{};
+    const isDone = g.brands.size>0 && [...g.brands].every(b=>bc[b]&&bc[b].done);
+    const hasBroken = [...g.brands].some(b=>bc[b]&&bc[b].broken);
+    if(ALLOC.sel[g.id] && isDone && !hasBroken) delete ALLOC.sel[g.id];
+  });
   const selIds = Object.keys(ALLOC.sel).filter(k=>ALLOC.sel[k]);
   const brands = [...new Set(rows('orderLedger').filter(r=>ALLOC.sel[String(r['受注ID']||'').trim()]).map(r=>brandOf(r['商品ID'])||'（メーカー不明）'))].sort();
   if(brands.length && !brands.includes(ALLOC.brand)) ALLOC.brand = brands[0];
@@ -2945,7 +2953,7 @@ function vAllocation(){
 
   // ① 対象受注（振分済み=グレーの案件は下にまとめる。2026-07-18 ユーザー指定）
   const doneOf = g => g.brands.size>0 && [...g.brands].every(b=>{ const e=(cov[g.id]||{})[b]; return e&&e.done; });
-  const olist = allocOrderGroups().sort((a,b)=>Number(doneOf(a))-Number(doneOf(b)));
+  const olist = orderGroups.sort((a,b)=>Number(doneOf(a))-Number(doneOf(b)));
   const firstDoneId = (olist.find(g=>doneOf(g))||{}).id;
   html += '<div class="card"><b class="small">① 対象の受注を選ぶ（'+selIds.length+'件選択中）</b><p class="muted small" style="margin:4px 0 0">行をクリックすると商品の内訳が開きます</p><div class="tblwrap" style="margin-top:8px;max-height:340px;overflow:auto"><table>' +
     '<tr><th></th><th>受注ID</th><th>状態</th><th>卸先</th><th>ブランド</th><th>受注日</th><th class="num">明細数</th></tr>' +
@@ -2989,10 +2997,6 @@ function vAllocation(){
   const baseAllocMode = (!hasOwn && outTokens.length) ? 'out' : (hasOwn && !outTokens.length ? 'own' : 'mixed');
   const allocMode = baseAllocMode==='own' && ALLOC.addOut ? 'mixed' : baseAllocMode;
   ALLOC.mode = allocMode;   // allocCalc から参照（own のときは外注枠を使わない）
-  if(baseAllocMode==='own'){
-    html += '<div class="card"><label class="pill" style="cursor:pointer"><input type="checkbox" '+(ALLOC.addOut?'checked':'')+' onclick="allocAddOutToggle(this.checked)" style="width:15px;height:15px;vertical-align:-2px"> <b>🤝 外注も使う</b></label>' +
-      (ALLOC.addOut?'<p class="muted small" style="margin:6px 0 0">受注台帳の仕入れ形態は変わりません。確定した外注分は回収台帳へ外注として登録され、支払い集計に反映されます。</p>':'')+'</div>';
-  }
 
   // ⚡ 外注のみ: サロン割り振りを丸ごとスキップして、全数量を外注先からの回収として一括登録（回収番号1つ）
   // 外注先が2社以上のときは⚡は使わず、②の🤝外注仕入枠で金額枠割りする（サロン0軒でも🧮計算できる）
@@ -3084,6 +3088,10 @@ function vAllocation(){
           return '<tr><td class="mono small">'+esc(zid)+'</td><td class="small">'+esc(z['商品名'])+' '+esc(z['容量']||'')+'</td><td class="num">'+num(z['残数'])+'</td>' +
           '<td class="num"><input type="number" value="'+(num(u[zid])||'')+'" min="0" max="'+num(z['残数'])+'" onchange="allocStockUse(\''+zid+'\',this.value)" style="width:72px;text-align:right"></td></tr>'; }).join('') +
         '</table></div></div>'; })() +
+    // 2026-07-20 ユーザー要望: 自社サロンのみの受注で使う外注トグルを②カード内に表示
+    (()=>{ if(baseAllocMode!=='own') return '';
+      return '<div style="margin-top:10px"><label class="pill" style="cursor:pointer"><input type="checkbox" '+(ALLOC.addOut?'checked':'')+' onclick="allocAddOutToggle(this.checked)" style="width:15px;height:15px;vertical-align:-2px"> <b>🤝 外注も使う</b></label>' +
+        (ALLOC.addOut?'<p class="muted small" style="margin:5px 0 0">受注台帳の仕入れ形態は変わりません。確定した外注分は回収台帳へ外注として登録され、支払い集計に反映されます。</p>':'')+'</div>'; })() +
     // 🤝外注仕入枠（計算前の設定・自社サロンのみモードでは出さない）: 受注の仕入れ形態の外注先が自動で行に入る。
     // 金額枠あり=🧮計算でその外注先へ先取り（支払額ベース・上の行から順）／枠が空欄=自社サロンに配ったあとの余りを全部吸収
     (()=>{ if(allocMode==='own') return '';
