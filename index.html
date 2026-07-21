@@ -725,8 +725,10 @@ function collectSupplierLines(inMonthFn, allMonths){
     const rate = payRateOf(sal[supId], brand);
     const list = num((product(pid)||{})['定価（税抜）']);
     let unit, unitNote='';
-    if(rate!=null && supId===PAYIDS.pure && brand===NM.boxBrand){
-      unit = Math.floor(list*(Math.round((rate-BROKER_RATE)*1000)/1000));   // 39.9%は切捨・2%は仲介側へ
+    if(rate!=null && supId===PAYIDS.pure){
+      // 口座請求元経由は全ブランド「マスタ率=請求率+仲介2%」の上乗せ済み値（例 41.9%=39.9%+2% / 48%=46%+2%）。
+      // 請求想定はマスタ率−2%の切捨・2%は仲介側へ（2026-07-21 ユーザー確定でブランド限定を撤廃）
+      unit = Math.floor(list*(Math.round((rate-BROKER_RATE)*1000)/1000));
     } else if(rate!=null){ unit = Math.round(list*rate); }
     else { unit = ownCost(pid); unitNote='率未設定→仕入価格で仮'; }
     // 受注に紐づかない仕入（手動仕入れ・外注一括の旧データ等）は行自体の発注日が計上日なので「仮」にしない
@@ -782,7 +784,7 @@ function vPayments(){
             g.lines.map(l=>'<tr><td class="small">'+esc(l.date)+(l.prov?' <span style="color:var(--s4)">仮</span>':'')+'</td><td class="mono small">'+esc(l.kid)+'</td><td class="mono small">'+esc(l.oids)+'</td><td class="small">'+esc(l.salon)+'</td><td class="small">'+esc(l.brand)+'</td><td class="small">'+esc(l.name)+' '+esc(l.size)+'</td><td class="num">'+l.qty+'</td><td class="num">'+yen(l.unit)+(l.unitNote?'<br><span class="small" style="color:var(--s4)">'+esc(l.unitNote)+'</span>':'')+'</td><td class="num">'+yen(l.amt)+'</td></tr>').join('') +
             '</table></div>' : '') + '</div>';
       }).join('') +
-      (isPure ? '<p class="muted small" style="margin-top:6px">※ '+esc(NM.boxBrand)+'分は 定価×39.9%（切捨）で計算（マスタの41.9%との差2%は仲介手数料として下の🤝カードに計上）。サロン別口座請求・税は伝票単位切捨のため請求書と数円ズレることがあります。</p>' : '') +
+      (isPure ? '<p class="muted small" style="margin-top:6px">※ 定価×（マスタ率−2%）の切捨で計算（マスタ率は仲介2%上乗せ済み。差の2%は仲介手数料として下の🤝カードに計上）。サロン別口座請求・税は伝票単位切捨のため請求書と数円ズレることがあります。</p>' : '') +
       '</div>';
   });
 
@@ -798,11 +800,12 @@ function vPayments(){
 
   // ---- 🤝仲介手数料（口座請求元の対象ブランド分×2%。締め・支払は口座請求元と同サイクル） ----
   const pureRow = sal[PAYIDS.pure]||{}, brokerRow = sal[PAYIDS.broker]||{};
-  const pureNapLines = (bySup[PAYIDS.pure]||[]).filter(l=>l.brand===NM.boxBrand);
-  if(pureNapLines.length){
+  // 2%の対象は口座請求元経由の全ブランド（2026-07-21 ユーザー確定でブランド限定を撤廃）
+  const pureLines = bySup[PAYIDS.pure]||[];
+  if(pureLines.length){
     const per = {};
-    pureNapLines.forEach(l=>{ const pr = payPeriod(l.date, String(pureRow['締め日']||''), String(pureRow['支払日']||'')); (per[pr.key]=per[pr.key]||{pr, sub:0}).sub+=l.amt; });
-    html += '<div class="card"><div class="row"><b>🤝 '+esc(salonLabel(brokerRow)||'仲介')+'（仲介手数料 2%）</b><span class="small muted">'+esc(salonLabel(pureRow))+'請求想定額（'+esc(NM.boxBrand)+'分・税抜）×2% ／ 締め支払は'+esc(salonLabel(pureRow))+'と同サイクル。端数は請求書で照合</span></div>' +
+    pureLines.forEach(l=>{ const pr = payPeriod(l.date, String(pureRow['締め日']||''), String(pureRow['支払日']||'')); (per[pr.key]=per[pr.key]||{pr, sub:0}).sub+=l.amt; });
+    html += '<div class="card"><div class="row"><b>🤝 '+esc(salonLabel(brokerRow)||'仲介')+'（仲介手数料 2%）</b><span class="small muted">'+esc(salonLabel(pureRow))+'請求想定額（税抜）×2% ／ 締め支払は'+esc(salonLabel(pureRow))+'と同サイクル。端数は請求書で照合</span></div>' +
       Object.keys(per).sort().reverse().map(k=>{ const g=per[k];
         return '<div class="row small" style="margin-top:6px;border-top:1px solid var(--axis);padding-top:6px"><b>'+esc(g.pr.label)+'</b><span>支払予定: <b>'+esc(g.pr.payLabel)+'</b></span><span class="right"><b>'+yen(Math.round(g.sub*BROKER_RATE))+'</b> <span class="muted">（対象 '+yen(g.sub)+'×2%）</span></span></div>'; }).join('') +
       '<p class="muted small" style="margin-top:6px">※ 連携サロン仕入の1%は掛け率確定待ちのため未計上（確定したら足します）。外注仕入（定価×50%・都度）は上の🤝カードに出ます。</p></div>';
@@ -1185,10 +1188,10 @@ function vDashboard(){
       pushOut((salonLabel(s)||'仕入先未記録')+(assumed?'（仮）':''), total, pd, 'var(--s3)', null, assumed);
     });
   });
-  // 2) 仲介手数料2%（口座請求元の対象ブランド分。締め支払は口座請求元と同サイクル）
+  // 2) 仲介手数料2%（口座請求元経由の全ブランド。締め支払は口座請求元と同サイクル。2026-07-21 ブランド限定を撤廃）
   (()=>{ const pureRow=csl.sal[PAYIDS.pure]||{}, brokerRow=csl.sal[PAYIDS.broker]||{};
     const per={};
-    (csl.bySup[PAYIDS.pure]||[]).filter(l=>l.brand===NM.boxBrand).forEach(l=>{
+    (csl.bySup[PAYIDS.pure]||[]).forEach(l=>{
       const pr=payPeriod(l.date, String(pureRow['締め日']||''), String(pureRow['支払日']||'')); (per[pr.key]=per[pr.key]||{pr,sub:0}).sub+=l.amt; });
     Object.values(per).forEach(g=>pushOut((salonLabel(brokerRow)||'仲介')+' 2%', Math.round(g.sub*BROKER_RATE), g.pr.pd, 'var(--s4)'));
   })();
