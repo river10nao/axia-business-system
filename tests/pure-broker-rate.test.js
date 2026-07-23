@@ -60,6 +60,15 @@ const units = vm.runInContext(`(()=>{
   return u;
 })()`, ctx);
 
+// 仲介手数料の基準額 = 定価×数量（listAmt）。2026-07-23 実請求書で「手数料=定価×2%」と確定
+const listAmts = vm.runInContext(`(()=>{
+  const bySup = collectSupplierLines(null).bySup;
+  return (bySup['S0014']||[]).map(l => l.listAmt);
+})()`, ctx);
+if (!(listAmts.length === 2 && listAmts.every(v => v === 1000))) {
+  throw new Error('listAmt(定価×数量) mismatch: ' + JSON.stringify(listAmts));
+}
+
 const expect = {
   'S0014:ブランドA': 399,  // 41.9% − 2% = 39.9% 切捨
   'S0014:ブランドB': 460,  // 48% − 2% = 46% 切捨

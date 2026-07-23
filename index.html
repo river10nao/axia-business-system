@@ -401,10 +401,16 @@ function orderPill(st, pay){
     const c = STATUS_COLOR[st]||'var(--muted)';
     return '<span class="pill" style="background:color-mix(in srgb,'+c+' 15%, transparent);color:'+c+'">請求済み（'+esc(NM.credit)+'）</span>';
   }
-  // 一括請求は半金が無いので表示だけ読み替え（ステータス値・タブ名はそのまま。掛け払いの読み替えと同方式・2026-07-23）
-  if(String(pay||'').trim()==='一括請求' && (st==='半金入金待ち' || st==='最終入金待ち')){
+  // 一括請求（発注時/納品前）は半金が無いので表示だけ読み替え（ステータス値・タブ名はそのまま。掛け払いの読み替えと同方式・2026-07-23）
+  const payT = String(pay||'').trim();
+  const lumpPre = payT==='発注時一括請求' || payT==='一括請求';   // 旧表記も発注時扱い
+  const lumpPost = payT==='納品前一括請求';
+  if((lumpPre || lumpPost) && (st==='半金入金待ち' || st==='最終入金待ち')){
     const c2 = STATUS_COLOR[st]||'var(--muted)';
-    return '<span class="pill" style="background:color-mix(in srgb,'+c2+' 15%, transparent);color:'+c2+'">'+(st==='半金入金待ち'?'全額入金待ち':'最終確認待ち')+'</span>';
+    const label = lumpPre
+      ? (st==='半金入金待ち' ? '全額入金待ち' : '最終確認待ち')            // 発注時一括: 入金は最初・後半は確認のみ
+      : (st==='半金入金待ち' ? '進行中（請求は納品前）' : '全額入金待ち');  // 納品前一括: 請求・入金は後半
+    return '<span class="pill" style="background:color-mix(in srgb,'+c2+' 15%, transparent);color:'+c2+'">'+label+'</span>';
   }
   return pill(st);
 }
@@ -737,9 +743,10 @@ function collectSupplierLines(inMonthFn, allMonths){
     } else if(rate!=null){ unit = Math.round(list*rate); }
     else { unit = ownCost(pid); unitNote='率未設定→仕入価格で仮'; }
     // 受注に紐づかない仕入（手動仕入れ・外注一括の旧データ等）は行自体の発注日が計上日なので「仮」にしない
+    // listAmt=定価×数量: 仲介手数料の基準額（2026-07-23 実請求書で「手数料=定価×2%」と確定したため保持）
     (bySup[supId]=bySup[supId]||[]).push({date, prov:oids.length>0 && !od, kid:String(r['回収ID']||'').trim(), oids:oids.join(', '),
       salon:String(r['サロン名']||''), brand, name:String(r['商品名']||''), size:String(r['容量']||''), qty, unit, unitNote,
-      amt:unit*qty, isOut:String(r['区分']||'').trim()==='外注'});
+      amt:unit*qty, listAmt:list*qty, isOut:String(r['区分']||'').trim()==='外注'});
   });
   return {bySup, sal};
 }
@@ -803,16 +810,17 @@ function vPayments(){
         lines.map(l=>'<tr><td class="small">'+esc(l.date)+'</td><td class="mono small">'+esc(l.kid)+'</td><td class="mono small">'+esc(l.oids)+'</td><td class="small">'+esc(l.salon)+'</td><td class="small">'+esc(l.brand)+'</td><td class="small">'+esc(l.name)+'</td><td class="num">'+l.qty+'</td><td class="num">'+yen(l.amt)+'</td></tr>').join('')+'</table></div>' : '') + '</div>';
   }
 
-  // ---- 🤝仲介手数料（口座請求元の対象ブランド分×2%。締め・支払は口座請求元と同サイクル） ----
+  // ---- 🤝仲介手数料（口座請求元経由の全ブランド。基準額=商品の定価×2%） ----
+  // 2026-07-23 実請求書（BETSグループ発注手数料¥66,512=定価総額×2%）で基準額を「定価」に確定。
+  // 旧実装の「請求想定額×2%」は約4割に過小計上されるため撤回
   const pureRow = sal[PAYIDS.pure]||{}, brokerRow = sal[PAYIDS.broker]||{};
-  // 2%の対象は口座請求元経由の全ブランド（2026-07-21 ユーザー確定でブランド限定を撤廃）
   const pureLines = bySup[PAYIDS.pure]||[];
   if(pureLines.length){
     const per = {};
-    pureLines.forEach(l=>{ const pr = payPeriod(l.date, String(pureRow['締め日']||''), String(pureRow['支払日']||'')); (per[pr.key]=per[pr.key]||{pr, sub:0}).sub+=l.amt; });
-    html += '<div class="card"><div class="row"><b>🤝 '+esc(salonLabel(brokerRow)||'仲介')+'（仲介手数料 2%）</b><span class="small muted">'+esc(salonLabel(pureRow))+'請求想定額（税抜）×2% ／ 締め支払は'+esc(salonLabel(pureRow))+'と同サイクル。端数は請求書で照合</span></div>' +
+    pureLines.forEach(l=>{ const pr = payPeriod(l.date, String(pureRow['締め日']||''), String(pureRow['支払日']||'')); (per[pr.key]=per[pr.key]||{pr, sub:0}).sub+=num(l.listAmt); });
+    html += '<div class="card"><div class="row"><b>🤝 '+esc(salonLabel(brokerRow)||'仲介')+'（仲介手数料 2%）</b><span class="small muted">発注商品の<b>定価</b>（税抜）×2% ／ 締め支払は'+esc(salonLabel(pureRow))+'と同サイクル（2026-07-23 実請求書で確定）</span></div>' +
       Object.keys(per).sort().reverse().map(k=>{ const g=per[k];
-        return '<div class="row small" style="margin-top:6px;border-top:1px solid var(--axis);padding-top:6px"><b>'+esc(g.pr.label)+'</b><span>支払予定: <b>'+esc(g.pr.payLabel)+'</b></span><span class="right"><b>'+yen(Math.round(g.sub*BROKER_RATE))+'</b> <span class="muted">（対象 '+yen(g.sub)+'×2%）</span></span></div>'; }).join('') +
+        return '<div class="row small" style="margin-top:6px;border-top:1px solid var(--axis);padding-top:6px"><b>'+esc(g.pr.label)+'</b><span>支払予定: <b>'+esc(g.pr.payLabel)+'</b></span><span class="right"><b>'+yen(Math.round(g.sub*BROKER_RATE))+'</b> <span class="muted">（対象定価 '+yen(g.sub)+'×2%）</span></span></div>'; }).join('') +
       '<p class="muted small" style="margin-top:6px">※ 連携サロン仕入の1%は掛け率確定待ちのため未計上（確定したら足します）。外注仕入（定価×50%・都度）は上の🤝カードに出ます。</p></div>';
   }
 
@@ -1195,11 +1203,11 @@ function vDashboard(){
       pushOut((salonLabel(s)||'仕入先未記録')+(assumed?'（仮）':''), total, pd, 'var(--s3)', null, assumed);
     });
   });
-  // 2) 仲介手数料2%（口座請求元経由の全ブランド。締め支払は口座請求元と同サイクル。2026-07-21 ブランド限定を撤廃）
+  // 2) 仲介手数料2%（口座請求元経由の全ブランド。基準額=定価×2%・2026-07-23 実請求書で確定。締め支払は口座請求元と同サイクル）
   (()=>{ const pureRow=csl.sal[PAYIDS.pure]||{}, brokerRow=csl.sal[PAYIDS.broker]||{};
     const per={};
     (csl.bySup[PAYIDS.pure]||[]).forEach(l=>{
-      const pr=payPeriod(l.date, String(pureRow['締め日']||''), String(pureRow['支払日']||'')); (per[pr.key]=per[pr.key]||{pr,sub:0}).sub+=l.amt; });
+      const pr=payPeriod(l.date, String(pureRow['締め日']||''), String(pureRow['支払日']||'')); (per[pr.key]=per[pr.key]||{pr,sub:0}).sub+=num(l.listAmt); });
     Object.values(per).forEach(g=>pushOut((salonLabel(brokerRow)||'仲介')+' 2%', Math.round(g.sub*BROKER_RATE), g.pr.pd, 'var(--s4)'));
   })();
   // 3) 紹介報酬（発注済み案件。発注日1〜15日→当月末・16日〜→翌月10日。2026-07-23 発注ベースに訂正・入金は待たない）
@@ -1660,17 +1668,25 @@ function vOrders(){
       // 進行ガード（サーバー側と同条件）: 請求書未発行・発注日未入力の間はボタンを案内に差し替え（スルー事故防止）
       (()=>{ const activeDocs = rows('docLog').filter(d=>String(d['削除']||'').trim()==='' && String(d['受注ID']||'').trim()===String(g.id).trim()).map(d=>String(d['種類']||''));
         const isCreditPay = NM.credit && String(g.pay||'').indexOf(NM.credit)===0;
-        // 掛け払い・一括請求は全額請求書が必須（①では通さない。サーバー側ガードも同条件・2026-07-23）
-        const needsFullInv = isCreditPay || String(g.pay||'').trim()==='一括請求';
+        const gPay = String(g.pay||'').trim();
+        // 掛け払い・発注時一括は全額請求書が必須（①では通さない）。納品前一括は受注時の請求なし＝ガードなし。
+        // 最終入金完了前は一括系とも全額請求書が必須（サーバー側ガードも同条件・2026-07-23）
+        const isLumpPre = gPay==='発注時一括請求' || gPay==='一括請求';
+        const isLumpPost = gPay==='納品前一括請求';
+        const needsFullInv = isCreditPay || isLumpPre;
         const guard =
-          (g.st==='商談中' && !activeDocs.some(k=> needsFullInv ? k.indexOf('請求書（全額')>=0 : (k.indexOf('請求書①')>=0 || k.indexOf('請求書（全額')>=0))) ? ['✔ 請求済み（→ '+(needsFullInv&&!isCreditPay?'全額入金待ち':'半金入金待ち')+'）', needsFullInv ? '先に請求書（全額）を発行してください（📄帳票発行から）' : '先に請求書①（前金）を発行してください（📄帳票発行から）'] :
+          (g.st==='商談中' && !isLumpPost && !activeDocs.some(k=> needsFullInv ? k.indexOf('請求書（全額')>=0 : (k.indexOf('請求書①')>=0 || k.indexOf('請求書（全額')>=0))) ? ['✔ 請求済み（→ '+(isLumpPre?'全額入金待ち':'半金入金待ち')+'）', needsFullInv ? '先に請求書（全額）を発行してください（📄帳票発行から）' : '先に請求書①（前金）を発行してください（📄帳票発行から）'] :
           (g.st==='振分/発注' && !String(g.ord||'').trim()) ? ['✔ 発注済み（→ 回収中）','先に📦発注日を入れてください（実際に発注した日）'] :
-          (g.st==='最終入金待ち' && !isCreditPay && !activeDocs.some(k=>k.indexOf('請求書②')>=0||k.indexOf('請求書（全額')>=0)) ? ['✔ 入金確認済み（→ 最終入金完了）','先に請求書②（残金）を発行してください（📄帳票発行から）'] :
+          (g.st==='最終入金待ち' && (isLumpPre||isLumpPost) && !activeDocs.some(k=>k.indexOf('請求書（全額')>=0)) ? ['✔ 入金確認済み（→ 最終入金完了）','先に請求書（全額）を発行してください（📄帳票発行から）'] :
+          (g.st==='最終入金待ち' && !isCreditPay && !isLumpPre && !isLumpPost && !activeDocs.some(k=>k.indexOf('請求書②')>=0||k.indexOf('請求書（全額')>=0)) ? ['✔ 入金確認済み（→ 最終入金完了）','先に請求書②（残金）を発行してください（📄帳票発行から）'] :
           (g.st==='最終入金完了' && !ship) ? ['✔ 納品済み（→ 納品完了）','先に🚚出荷を作成してください（出荷が出荷完了になると自動で納品完了へ進みます）'] :
           (g.st==='最終入金完了' && ship && ship['ステータス']!=='出荷完了') ? ['✔ 納品済み（→ 納品完了）','出荷 '+ship['出荷ID']+' が出荷完了になると自動で納品完了へ進みます（現在: '+ship['ステータス']+'）'] : null;
         return guard
           ? '<button class="btn sm" onclick="toast(\''+guard[1]+'\', true)" style="opacity:.55">'+guard[0]+'</button>'
-          : advanceBtn('order', g.id, g.st); })() +
+          : (isLumpPost && g.st==='商談中'
+            // 納品前一括の受注時は請求が無いため「請求済み」表記を避ける（ステータス値は既存のまま前進）
+            ? '<button class="btn pri sm" onclick="act(\'advanceStatus\',{entity:\'order\',id:\''+g.id+'\'},\''+g.id+' を進行中にしました（請求は納品前）\')">✔ 受注確定（→ 進行・請求は納品前）</button>'
+            : advanceBtn('order', g.id, g.st)); })() +
       (canShip && !busy('order', g.id) ? '<button class="btn sm" onclick="act(\'createShipment\',{受注ID:\''+g.id+'\'},\'出荷を作成しました\',[\'shipments\'])">🚚 出荷を作成</button>' : '') +
       (ship ? '<span class="small muted">🚚 出荷: '+ship['出荷ID']+' '+pill(ship['ステータス'])+'</span>' : '') +
       // 紐づく回収番号（回収台帳の対象受注から逆引き。2026-07-18 ユーザー要望「それぞれの場所で見れるように」）
@@ -1725,8 +1741,12 @@ function journeyHtml(g, ship){
   const cov = allocCoverageMemo();
   const obrands = new Set(); (g.rows||[]).forEach(r=>{ const b=brandOf(r['商品ID']); if(b) obrands.add(b); });
   const allocDone = obrands.size>0 && [...obrands].every(b=>(((cov[String(g.id||'').trim()]||{})[b])||{}).done);
-  // 一括請求（2026-07-23 追加）: 全額を1回で請求→入金→進行。掛け払いと違い入金を待ってから進む（前金ルール通り）
-  const isLump = String(g.pay||'').trim()==='一括請求';
+  // 一括請求（2026-07-23 追加・同日2パターンに分割）: どちらも入金完了まで出荷不可（前金ルール通り）
+  // 発注時一括=全額を先に請求・入金してから進行／納品前一括=進行が先・検品後（納品前）に全額請求→入金→出荷
+  const payTj = String(g.pay||'').trim();
+  const isLump = payTj==='発注時一括請求' || payTj==='一括請求';
+  const isLumpPost = payTj==='納品前一括請求';
+  const invFullDone = docs.some(k=>k.indexOf('請求書（全額')>=0);
   const steps = isCredit ? [
     ['受注', true],
     ['全額請求（'+NM.credit+(g.via?'・'+NM.via:'')+'）', oi>=1],   // 発行と同時にステータス前進。入金は待たない
@@ -1749,6 +1769,17 @@ function journeyHtml(g, ship){
     ['最終確認', paidDone(g.st)],   // 入金は全額入金で済んでいるため確認のみ（ステータスは最終入金待ち→完了を踏む）
     ['引去', shipPicked],
     ['出荷', shipDone]
+  ]) : isLumpPost ? [
+    ['受注', true],
+    ['振分', oi>=3 || allocDone],
+    ['発注', oi>=3 || !!String(g.ord||'').trim()]
+  ].concat(g.via ? [[NM.via+'→'+NM.co+'処理', viaMoneyDone]] : []).concat([
+    ['回収', oi>=4],
+    ['検品/ロット処理', oi>=5],
+    ['全額請求（納品前）'+mf, invFullDone || paidDone(g.st)],
+    ['全額入金', paidDone(g.st)],
+    ['引去', shipPicked],
+    ['出荷', shipDone]
   ]) : [
     ['受注', true],
     ['半金①請求'+mf+(g.via?'（'+NM.via+'）':''), oi>=1],
@@ -1763,7 +1794,7 @@ function journeyHtml(g, ship){
     ['引去', shipPicked],
     ['出荷', shipDone]
   ]);
-  const flowName = (isCredit ? NM.credit : isLump ? '一括請求' : '半金×2') + (g.via ? '・'+NM.via+'経由' : '・直');
+  const flowName = (isCredit ? NM.credit : isLump ? '発注時一括' : isLumpPost ? '納品前一括' : '半金×2') + (g.via ? '・'+NM.via+'経由' : '・直');
   let nowMarked = false;
   return '<div class="steps journey"><span class="small muted" style="margin-right:6px">'+esc(flowName)+'：</span>' + steps.map(s=>{
     let cls = 'done';
@@ -2044,7 +2075,7 @@ function newOrderForm(){
     '<div class="row" style="margin-top:10px">' +
     '<label class="small">卸先<br><select id="noW" style="max-width:240px" onchange="viewState.noW=this.value;noApplyRates()"><option value="">選択してください</option>'+wOpts+'</select></label>' +
     '<label class="small">受注日<br><input type="date" id="noDate" value="'+(viewState.noDate||t)+'" onchange="viewState.noDate=this.value"></label>' +
-    '<label class="small">支払方式<br><select id="noPay" onchange="viewState.noPay=this.value"><option '+(viewState.noPay==='半金×2'?'selected':'')+'>半金×2</option><option '+(viewState.noPay===''+NM.credit+'翌月末'?'selected':'')+'>'+NM.credit+'翌月末</option><option '+(viewState.noPay==='一括請求'?'selected':'')+'>一括請求</option></select></label>' +
+    '<label class="small">支払方式<br><select id="noPay" onchange="viewState.noPay=this.value"><option '+(viewState.noPay==='半金×2'?'selected':'')+'>半金×2</option><option '+(viewState.noPay===''+NM.credit+'翌月末'?'selected':'')+'>'+NM.credit+'翌月末</option><option '+(viewState.noPay==='発注時一括請求'?'selected':'')+'>発注時一括請求</option><option '+(viewState.noPay==='納品前一括請求'?'selected':'')+'>納品前一括請求</option></select></label>' +
     // 仕入れ形態はチェック式ピル（振り分けのサロン選択と同じ操作感の簡易版・2026-07-17 ユーザー案）。
     // 選択肢=「自社サロン」＋種別=外注の実名だけ（マスタの種別はサロン/ディーラー/外注の3値。ディーラーは仕入れ形態に出さない）
     '<label class="small">仕入れ形態（あてはまるものすべてにチェック）<br><span style="display:inline-flex;gap:4px;align-items:center;flex-wrap:wrap;margin-top:2px">' +
